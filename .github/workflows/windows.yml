@@ -37,7 +37,7 @@ jobs:
         run: |
           Get-ChildItem -Path artifacts -Recurse | ForEach-Object { $_.FullName }
           Get-ChildItem -Path artifacts -Filter *.zip -Recurse | ForEach-Object { Expand-Archive -Path $_.FullName -DestinationPath built -Force }
-          $dll = Get-ChildItem -Path artifacts, built -Filter php_hp_uploadprogress_guard.dll -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          $dll = Get-ChildItem -Path artifacts, built -Filter "php_hp_uploadprogress_guard*.dll" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $dll) { Write-Error "php_hp_uploadprogress_guard.dll not found"; exit 1 }
           Write-Host "DLL: $($dll.FullName)"
           php -n -d "extension=$($dll.FullName)" --ri hp_uploadprogress_guard
