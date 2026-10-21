@@ -367,6 +367,14 @@ cd src && phpize && ./configure && make
 # -> modules/hp_uploadprogress_guard.so ; `make install` drops it in extension_dir
 ```
 
+### Windows
+
+No prebuilt DLL. The source builds with the PHP SDK (`phpize && configure --enable-hp-uploadprogress-guard && nmake`
+from the repository root, `config.w32` picks the parser copy) and with the PHP team's
+[php-windows-builder](https://github.com/php/php-windows-builder); the `Windows build` workflow in this repository
+builds nts and ts x64 DLLs for 8.4, 8.1 and 7.4 on every push and loads the nts ones into a stock Windows PHP
+(`--ri` output in the job log). Thread-safe builds carry the per-thread globals cache; PHP 5.6 ZTS is not supported.
+
 ### Prebuilt
 
 Pick `dist/hp_uploadprogress_guard-<X.Y>.so` for your minor version, verify it against

@@ -40,5 +40,6 @@ jobs:
           $dll = Get-ChildItem -Path artifacts, built -Filter "php_hp_uploadprogress_guard*.dll" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $dll) { Write-Error "php_hp_uploadprogress_guard.dll not found"; exit 1 }
           Write-Host "DLL: $($dll.FullName)"
-          php -n -d "extension=$($dll.FullName)" --ri hp_uploadprogress_guard
-          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $out = & php -n -d "extension=$($dll.FullName)" --ri hp_uploadprogress_guard 2>&1 | Out-String
+          Write-Host $out
+          if ($out -notmatch 'version => 3\.' -or $out -match 'Unable to load') { Write-Error "DLL did not load"; exit 1 }
