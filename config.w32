@@ -1,6 +1,6 @@
 // Windows build (php-sdk / php-windows-builder): phpize && configure --enable-hp-uploadprogress-guard && nmake
 // The Unix build lives in src/config.m4; both pick the parser copy for the PHP they are built against.
-ARG_ENABLE("hp_uploadprogress_guard", "hp_uploadprogress_guard support", "no");
+ARG_ENABLE("hp-uploadprogress-guard", "hp_uploadprogress_guard support", "no");
 
 if (PHP_HP_UPLOADPROGRESS_GUARD != "no") {
 	var src = configure_module_dirname + "\\src";
