@@ -29,13 +29,14 @@
 #endif
 #include "php.h"
 #include "php_ini.h"
+#include "zend_ini.h"
 #include "ext/standard/info.h"
 #include "SAPI.h"
 #include "rfc1867.h"
 #include "ext/standard/php_versioning.h"
 #include <string.h>
 
-#define HP_MPG_VERSION "3.0.1"
+#define HP_MPG_VERSION "3.0.2"
 #define HP_MPG_NAME "hp_uploadprogress_guard"
 
 SAPI_API SAPI_POST_HANDLER_FUNC(hp_rfc1867_post_handler);
@@ -44,6 +45,50 @@ static SAPI_POST_HANDLER_FUNC(hp_upg_dispatch);
 static sapi_post_entry hp_upg_entry = { MULTIPART_CONTENT_TYPE, sizeof(MULTIPART_CONTENT_TYPE) - 1, NULL, hp_upg_dispatch };
 static int hp_upg_installed = 0;
 static int hp_upg_detached = 0;
+static int hp_upg_ini_forced = 0;
+
+/* Make the switch visible: set the MASTER value of session.upload_progress.enabled to 0 and lock the entry
+ * to PHP_INI_SYSTEM, so ini_get()/phpinfo() report it Off and .user.ini / .htaccess / ini_set() cannot turn
+ * it back on. The master value is written directly (not via zend_alter_ini_entry, which PHP would restore
+ * at the end of the first request). Runs at MINIT after ext/session registered the entry. */
+static void hp_upg_force_ini_off(void)
+{
+	const char name[] = "session.upload_progress.enabled";
+	zend_ini_entry *e;
+#if PHP_VERSION_ID < 70000
+	if (zend_hash_find(EG(ini_directives), (char *) name, sizeof(name), (void **) &e) != SUCCESS) {
+		return;
+	}
+	if (e->on_modify) {
+		e->on_modify(e, "0", 1, e->mh_arg1, e->mh_arg2, e->mh_arg3, ZEND_INI_STAGE_STARTUP TSRMLS_CC);
+	}
+	/* PHP 5: the default value is a static literal, a configured one a strdup; neither is ours to free.
+	 * Overwrite the pointer (one tiny persistent string per process). */
+	e->value = zend_strndup("0", 1);
+	e->value_length = 1;
+#else
+	e = zend_hash_str_find_ptr(EG(ini_directives), name, sizeof(name) - 1);
+	if (!e) {
+		return;
+	}
+	{
+		zend_string *zero = zend_string_init("0", 1, 1);
+		if (e->on_modify) {
+			e->on_modify(e, zero, e->mh_arg1, e->mh_arg2, e->mh_arg3, ZEND_INI_STAGE_STARTUP);
+		}
+		if (e->value) {
+#if PHP_VERSION_ID < 70300
+			zend_string_release(e->value);   /* zend_string_release_ex() exists from PHP 7.3 */
+#else
+			zend_string_release_ex(e->value, 1);
+#endif
+		}
+		e->value = zero;
+	}
+#endif
+	e->modifiable = PHP_INI_SYSTEM;
+	hp_upg_ini_forced = 1;
+}
 static int hp_upg_php_patched = 0;
 static int hp_upg_mbstring = 0;
 static char hp_upg_php_version[32] = "";
@@ -207,6 +252,9 @@ static PHP_MINIT_FUNCTION(hp_uploadprogress_guard)
 		php_rfc1867_callback = NULL;
 		hp_upg_detached = 1;
 	}
+	if (hp_upg_detached) {
+		hp_upg_force_ini_off();
+	}
 	return SUCCESS;
 }
 
@@ -227,6 +275,7 @@ static PHP_MINFO_FUNCTION(hp_uploadprogress_guard)
 	php_info_print_table_row(2, "mbstring.encoding_translation requests", hp_upg_installed ? (hp_upg_mbstring ? "handed to PHP's parser" : "n/a (mbstring not loaded)") : "n/a");
 	php_info_print_table_row(2, "running PHP already carries the official fix", hp_upg_php_patched ? (hp_upg_installed ? "yes" : "yes (parser replacement skipped)") : "no");
 	php_info_print_table_row(2, "session.upload_progress handler detached", hp_upg_detached ? "yes" : "no");
+	php_info_print_table_row(2, "session.upload_progress.enabled forced to 0 and locked (PHP_INI_SYSTEM)", hp_upg_ini_forced ? "yes" : "no");
 	php_info_print_table_end();
 	DISPLAY_INI_ENTRIES();
 }

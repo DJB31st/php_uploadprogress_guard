@@ -1,6 +1,6 @@
 # hp_uploadprogress_guard
 
-**v3.0.1, 21 October 2026.** A small PHP extension that closes the multipart path of
+**v3.0.2, 21 October 2026.** A small PHP extension that closes the multipart path of
 CVE-2026-109618 / CVE-2026-109619 on an unpatched PHP, built from the official fix now that it is
 public, without rebuilding PHP and without changing anything for the applications on the host. Built
 by [Hosted Power](https://www.hosted-power.com) for its own fleet, published for everyone. PHP 5.6
@@ -36,6 +36,13 @@ depend on `max_multipart_body_parts` existing (it was added mid-branch, so a sta
 install hit the 7.x failure), the parser copies no longer export PHP's own symbol names, `mode` is
 case-insensitive, any PHP newer than 8.6 counts as patched, and `cd src && phpize && ./configure && make`
 works again (config.m4 picks the parser copy for the PHP it is built against).
+
+**v3.0.2** (same day): `session.upload_progress.enabled` now reads as Off. The handler detach already
+made the setting meaningless, but `ini_get()` and `phpinfo()` kept reporting `On`, which confused
+scanners and customers. The module now writes the master value to `0` at startup and locks the entry at
+`PHP_INI_SYSTEM`, so `ini_get()` returns `"0"`, `phpinfo()` shows `Off => Off`, and `.user.ini`,
+`.htaccess` or `ini_set()` cannot change it. No other behaviour changed; binaries rebuilt for 5.6 to 8.5
+with the same glibc floor.
 
 ### What it does, silently
 
@@ -73,6 +80,11 @@ Three things happen at process start. None of them is visible to an application:
 4. **It steps aside on a patched PHP.** At startup the module reads `PHP_VERSION`; on 8.5.12, 8.4.27,
    8.3.36, 8.2.35 or later it leaves PHP's own parser in place. One deployment covers patched and
    unpatched hosts, and nothing has to be undone after the upgrade.
+
+Since v3.0.2 the module also writes the master value of `session.upload_progress.enabled` to `0` and locks
+the entry at `PHP_INI_SYSTEM`: `ini_get()` returns `"0"`, `phpinfo()` shows `Off => Off`, and `.user.ini`,
+`.htaccess` or `ini_set()` cannot turn it back on. That makes scanners and customers see what the detach
+already enforces.
 
 ### What it cannot do
 
