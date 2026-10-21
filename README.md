@@ -9,19 +9,49 @@ official Docker images) without rebuilding PHP.
 vendor ships packages. This module is for hosts that cannot upgrade yet (EOL branches 5.6 through 8.1,
 panel vendor lag, custom builds) or as a defense-in-depth layer alongside the official fix.
 
-### What it does
+### How it works
 
-Three defense layers, all active by default, all `PHP_INI_SYSTEM` only (no `.user.ini`, `.htaccess`
-or `ini_set()` can change them):
+The CVE attack surface is `php_session_rfc1867_callback` in ext/session — the session
+upload-progress handler that PHP's multipart parser (`main/rfc1867.c`) calls on every
+`multipart/form-data` request through a global function pointer. This module makes that handler
+unreachable at two levels:
 
-| Layer | What it does | Protection |
-|---|---|---|
-| **Carried parser with dead callback** (`mode = parse`, default) | Replaces the SAPI multipart handler with a carried copy of `main/rfc1867.c` where `php_rfc1867_callback` is redirected to a file-local NULL pointer. The compiler eliminates all callback code as dead code. Multipart uploads, `$_POST` and `$_FILES` work normally. | The session upload-progress handler (the CVE attack surface) is unreachable from within the parser, even if another extension re-registers the global callback. |
-| **Global callback detach** (`detach_upload_progress = 1`, default) | NULLs the global `php_rfc1867_callback` pointer at MINIT (after ext/session registered it) and re-NULLs it every request at RINIT. | Belt-and-suspenders: even PHP's own parser (if it somehow ran) would skip the callback. |
-| **Emergency block** (`mode = block`) | Refuses every `multipart/form-data` request before PHP reads the body: 415, `$_POST`/`$_FILES` empty. IPs in `allow_ips` bypass. | Certain against any bug in the multipart path. Costs all uploads while on. |
+**1. The carried parser has the callback compiled out (v2.1.0).** In `mode = parse` (the default),
+the module replaces PHP's SAPI multipart handler with its own copy of `main/rfc1867.c` (one per PHP
+branch, in `src/rfc1867/`). In these copies, `php_rfc1867_callback` is `#define`-redirected to a
+file-local static pointer that is always NULL. The compiler eliminates all 7 callback call sites as
+dead code — the instructions are not in the binary, there is no pointer to corrupt, and no runtime
+check to bypass. **Multipart uploads, `$_POST` and `$_FILES` work normally.** Only `session.upload_progress`
+tracking is lost (browsers report upload progress natively since 2012).
 
-The default settings (`mode = parse`, `detach_upload_progress = 1`) keep multipart working while
-making the CVE attack surface unreachable. No configuration needed beyond loading the extension:
+In v2.0.0 the carried parser still referenced the global `php_rfc1867_callback` pointer (which we
+NULLed at startup). That meant the callback code was still present in the binary and gated by a
+runtime NULL check. v2.1.0 removes the code entirely.
+
+**2. The global callback pointer is NULLed at process start.** With `detach_upload_progress = 1`
+(the default), the module NULLs the global `php_rfc1867_callback` at MINIT, after ext/session
+registered it. This is a safety net: if the handler replacement somehow fails and PHP's own parser
+runs instead of ours, the callback is still NULL.
+
+**Emergency block mode.** `mode = block` refuses every `multipart/form-data` request before PHP
+reads the body (HTTP 415). IPs in `allow_ips` bypass the block. This is certain against any bug in
+the multipart path but costs all file uploads and multipart forms.
+
+All settings are `PHP_INI_SYSTEM` only — no `.user.ini`, `.htaccess` or `ini_set()` can override them.
+
+### What this does NOT cover
+
+The official PHP fix is six layers deep. This module covers the first: making the session
+upload-progress callback unreachable during multipart parsing. The other five are engine-level
+changes that a loadable module cannot deliver:
+
+- **OOM hardening** — `ZEND_HAS_OOM()` checks after every allocation in rfc1867.c and the session serializer
+- **Fallible memory allocator** — `_femalloc` / `zend_hash_f*` family that returns NULL instead of aborting
+- **Serializer lockdown** — incomplete-class-only mode during session decode, blocks `__destruct` chains
+- **Early-RINIT state zeroing** — zeroes `BG(serialize_lock)` before `php_hash_environment` runs
+- **Memory hard limit** — new `memory_hard_limit_percent` INI
+
+**Upgrade PHP when your vendor ships packages.** This module is for the gap.
 
 ```ini
 extension=hp_uploadprogress_guard.so
