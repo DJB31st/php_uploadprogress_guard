@@ -1,25 +1,34 @@
 # hp_uploadprogress_guard
 
-**v2.0.0, 21 October 2026 14:00 UTC.** One PHP extension for CVE-2026-109618 / CVE-2026-109619
+**v2.1.0, 21 October 2026.** One PHP extension for CVE-2026-109618 / CVE-2026-109619
 ("php2shell"), built by [Hosted Power](https://www.hosted-power.com) for its own fleet and published
 for everyone. Loads into PHP 5.6 through 8.5 (Sury, Remi, cPanel EA4, DirectAdmin CustomBuild,
-official Docker images) without rebuilding PHP. Three things, each switchable from php.ini only
-(`PHP_INI_SYSTEM`: no `.user.ini`, `.htaccess` or `ini_set()` can change them):
+official Docker images) without rebuilding PHP.
 
-| Setting | What it does | Protection |
+**The official fix is now available: PHP 8.5.12, 8.4.27, 8.3.36, 8.2.35.** Install it the moment your
+vendor ships packages. This module is for hosts that cannot upgrade yet (EOL branches 5.6 through 8.1,
+panel vendor lag, custom builds) or as a defense-in-depth layer alongside the official fix.
+
+### What it does
+
+Three defense layers, all active by default, all `PHP_INI_SYSTEM` only (no `.user.ini`, `.htaccess`
+or `ini_set()` can change them):
+
+| Layer | What it does | Protection |
 |---|---|---|
-| `hp_uploadprogress_guard.mode = block` | Refuses every `multipart/form-data` request **before PHP reads the body**: 415, `$_POST`/`$_FILES` empty, urlencoded forms and GETs untouched, IPs in `allow_ips` still parsed. | **Certain**, today, against any bug in the multipart path. Costs all uploads and multipart forms while on. |
-| `hp_uploadprogress_guard.mode = parse` (default) | Runs a copy of PHP's own multipart parser (`main/rfc1867.c`, one per branch in `src/rfc1867/`) carried inside the module. | None by itself today. The vehicle for a **patched parser** on every version the hour the official fix is public. |
-| `hp_uploadprogress_guard.detach_upload_progress = 1` (default) | Removes ext/session's upload-progress handler from the parser's callback pointer. | Partial: covers what `session.upload_progress.enabled=Off` covers, but un-overridable. People inside the embargo say this alone is not enough. |
+| **Carried parser with dead callback** (`mode = parse`, default) | Replaces the SAPI multipart handler with a carried copy of `main/rfc1867.c` where `php_rfc1867_callback` is redirected to a file-local NULL pointer. The compiler eliminates all callback code as dead code. Multipart uploads, `$_POST` and `$_FILES` work normally. | The session upload-progress handler (the CVE attack surface) is unreachable from within the parser, even if another extension re-registers the global callback. |
+| **Global callback detach** (`detach_upload_progress = 1`, default) | NULLs the global `php_rfc1867_callback` pointer at MINIT (after ext/session registered it) and re-NULLs it every request at RINIT. | Belt-and-suspenders: even PHP's own parser (if it somehow ran) would skip the callback. |
+| **Emergency block** (`mode = block`) | Refuses every `multipart/form-data` request before PHP reads the body: 415, `$_POST`/`$_FILES` empty. IPs in `allow_ips` bypass. | Certain against any bug in the multipart path. Costs all uploads while on. |
 
-**The fix is the official PHP release.** Install it the moment your vendor ships it. Until then, `block`
-is the only setting here that is certain; the other two are layers.
+The default settings (`mode = parse`, `detach_upload_progress = 1`) keep multipart working while
+making the CVE attack surface unreachable. No configuration needed beyond loading the extension:
 
 ```ini
 extension=hp_uploadprogress_guard.so
-hp_uploadprogress_guard.mode = block
-hp_uploadprogress_guard.allow_ips = 203.0.113.10,203.0.113.11
-hp_uploadprogress_guard.detach_upload_progress = 1
+; defaults are safe: mode=parse, detach_upload_progress=1
+; uncomment for emergency block mode:
+; hp_uploadprogress_guard.mode = block
+; hp_uploadprogress_guard.allow_ips = 203.0.113.10,203.0.113.11
 ```
 
 Verify: `php --ri hp_uploadprogress_guard` (shows version, handler replaced, mode, detached).

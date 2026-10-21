@@ -1,18 +1,20 @@
 /*
  * hp_uploadprogress_guard - owns PHP's multipart/form-data post handler.
  *
- * At MINIT the SAPI post entry for multipart/form-data (main/rfc1867.c's handler) is replaced by
- * ours. Two modes, selected by the INI_SYSTEM setting hp_uploadprogress_guard.mode:
- *   parse  (default) hand the request to the copy of main/rfc1867.c compiled into this module
- *                    (rfc1867_copy.c), so a patched parser can ship without rebuilding PHP.
- *   block            refuse the request before any parsing: the body is never read, $_POST and
- *                    $_FILES stay empty, the response code is set to 415 and a warning is logged.
- *                    Emergency mode for CVE-2026-109618 / CVE-2026-109619 while no fix exists.
- * hp_uploadprogress_guard.allow_ips: comma separated client IPs that are always parsed (admins, monitoring).
- * hp_uploadprogress_guard.detach_upload_progress (default 1): at MINIT, after ext/session has started, drop
- *   ext/session's multipart upload-progress handler (php_session_rfc1867_callback) from main/rfc1867.c's
- *   callback pointer, so that handler is unreachable whatever session.upload_progress.* says.
- * All settings are PHP_INI_SYSTEM: php.ini / php-fpm.conf only, never .user.ini, .htaccess or ini_set().
+ * Defence layers against CVE-2026-109618 / CVE-2026-109619:
+ *   1. MINIT: replaces the SAPI multipart post handler with our copy of rfc1867.c whose
+ *      php_rfc1867_callback is a file-static NULL, so session upload-progress code is
+ *      unreachable even if another extension re-registers the global callback.
+ *   2. MINIT: NULLs the global php_rfc1867_callback pointer (detach_upload_progress).
+ *   3. RINIT: re-NULLs php_rfc1867_callback every request as defence-in-depth.
+ *
+ * Modes (INI_SYSTEM hp_uploadprogress_guard.mode):
+ *   parse  (default) use the carried rfc1867.c copy — multipart works, upload progress disabled.
+ *   block            refuse multipart entirely (415), emergency fallback.
+ *
+ * hp_uploadprogress_guard.allow_ips: comma-separated client IPs bypassing block mode.
+ * hp_uploadprogress_guard.detach_upload_progress (default 1): NULL the global callback at MINIT.
+ * All settings are PHP_INI_SYSTEM only.
  */
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -24,7 +26,7 @@
 #include "rfc1867.h"
 #include <string.h>
 
-#define HP_MPG_VERSION "2.0.0"
+#define HP_MPG_VERSION "2.1.0"
 #define HP_MPG_NAME "hp_uploadprogress_guard"
 
 SAPI_API SAPI_POST_HANDLER_FUNC(hp_rfc1867_post_handler);
@@ -97,6 +99,14 @@ static SAPI_POST_HANDLER_FUNC(hp_upg_dispatch)
 #endif
 }
 
+static PHP_RINIT_FUNCTION(hp_uploadprogress_guard)
+{
+	if (php_rfc1867_callback != NULL) {
+		php_rfc1867_callback = NULL;
+	}
+	return SUCCESS;
+}
+
 static PHP_MINIT_FUNCTION(hp_uploadprogress_guard)
 {
 	REGISTER_INI_ENTRIES();
@@ -147,7 +157,7 @@ zend_module_entry hp_uploadprogress_guard_module_entry = {
 	NULL,
 	PHP_MINIT(hp_uploadprogress_guard),
 	PHP_MSHUTDOWN(hp_uploadprogress_guard),
-	NULL,
+	PHP_RINIT(hp_uploadprogress_guard),
 	NULL,
 	PHP_MINFO(hp_uploadprogress_guard),
 	HP_MPG_VERSION,
