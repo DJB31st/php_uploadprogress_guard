@@ -1,20 +1,21 @@
 // Windows build (php-sdk / php-windows-builder): phpize && configure --enable-hp-uploadprogress-guard && nmake
 // The Unix build lives in src/config.m4; both pick the parser copy for the PHP they are built against.
+// The two sources are copied next to this file at configure time (the Windows build system compiles
+// from the module directory); the copies are ignored by git.
 ARG_ENABLE("hp-uploadprogress-guard", "hp_uploadprogress_guard support", "no");
 
 if (PHP_HP_UPLOADPROGRESS_GUARD != "no") {
-	var src = configure_module_dirname + "\\src";
+	var here = configure_module_dirname;
+	var src = here + "\\src";
 	var branch = PHP_VERSION + "." + PHP_MINOR_VERSION;
 	if (branch == "5.4" || branch == "5.5") {
 		branch = "5.6";
 	}
 	var copy = src + "\\rfc1867\\rfc1867_copy-" + branch + ".c";
-	if (!FSO.FileExists(src + "\\rfc1867_copy.c")) {
-		if (!FSO.FileExists(copy)) {
-			ERROR("no carried parser for PHP " + branch + " (src\\rfc1867\\rfc1867_copy-" + branch + ".c)");
-		}
-		FSO.CopyFile(copy, src + "\\rfc1867_copy.c", true);
+	if (!FSO.FileExists(copy)) {
+		ERROR("no carried parser for PHP " + branch + " (src\\rfc1867\\rfc1867_copy-" + branch + ".c)");
 	}
-	EXTENSION("hp_uploadprogress_guard", "", PHP_HP_UPLOADPROGRESS_GUARD_SHARED, "/DZEND_ENABLE_STATIC_TSRMLS_CACHE=1");
-	ADD_SOURCES(src, "hp_uploadprogress_guard.c rfc1867_copy.c", "hp_uploadprogress_guard");
+	FSO.CopyFile(src + "\\hp_uploadprogress_guard.c", here + "\\hp_uploadprogress_guard.c", true);
+	FSO.CopyFile(copy, here + "\\rfc1867_copy.c", true);
+	EXTENSION("hp_uploadprogress_guard", "hp_uploadprogress_guard.c rfc1867_copy.c", PHP_HP_UPLOADPROGRESS_GUARD_SHARED, "/DZEND_ENABLE_STATIC_TSRMLS_CACHE=1");
 }
