@@ -1,32 +1,48 @@
 # hp_uploadprogress_guard
 
-A 60-line PHP extension that detaches the session extension's multipart upload-progress handler
-(`php_session_rfc1867_callback`, `ext/session/session.c`) from PHP's multipart parser at module
-init. Built by [Hosted Power](https://www.hosted-power.com) on 21 October 2026 as a fleet-wide
-stopgap for **CVE-2026-109618 / CVE-2026-109619** ("php2shell"), ahead of the official PHP security
-release, and kept afterwards as a second layer and as the only fix for PHP versions that no longer
-receive updates.
+**v2.0.0, 21 October 2026 14:00 UTC.** One PHP extension for CVE-2026-109618 / CVE-2026-109619
+("php2shell"), built by [Hosted Power](https://www.hosted-power.com) for its own fleet and published
+for everyone. Loads into PHP 5.6 through 8.5 (Sury, Remi, cPanel EA4, DirectAdmin CustomBuild,
+official Docker images) without rebuilding PHP. Three things, each switchable from php.ini only
+(`PHP_INI_SYSTEM`: no `.user.ini`, `.htaccess` or `ini_set()` can change them):
 
-* One C source file, builds unchanged against PHP 5.6 through 8.5 (`src/`).
-* Prebuilt NTS x86_64 binaries per PHP minor with checksums (`dist/`).
-* Ansible task files for Debian/Ubuntu (Sury packages), cPanel EA4 and DirectAdmin CustomBuild (`ansible/`).
-* Test tooling that proves the effect per SAPI (`test/`).
-* **`multipart_guard/`: a second module, `hp_multipart_guard`, that owns PHP's whole multipart parser.**
-  See [multipart_guard: block mode and a patchable parser](#multipart_guard-block-mode-and-a-patchable-parser).
+| Setting | What it does | Protection |
+|---|---|---|
+| `hp_uploadprogress_guard.mode = block` | Refuses every `multipart/form-data` request **before PHP reads the body**: 415, `$_POST`/`$_FILES` empty, urlencoded forms and GETs untouched, IPs in `allow_ips` still parsed. | **Certain**, today, against any bug in the multipart path. Costs all uploads and multipart forms while on. |
+| `hp_uploadprogress_guard.mode = parse` (default) | Runs a copy of PHP's own multipart parser (`main/rfc1867.c`, one per branch in `src/rfc1867/`) carried inside the module. | None by itself today. The vehicle for a **patched parser** on every version the hour the official fix is public. |
+| `hp_uploadprogress_guard.detach_upload_progress = 1` (default) | Removes ext/session's upload-progress handler from the parser's callback pointer. | Partial: covers what `session.upload_progress.enabled=Off` covers, but un-overridable. People inside the embargo say this alone is not enough. |
 
-> **Update 21 October 2026, 12:30 UTC.** People inside the embargo (watchTowr, and the PHP team as
-> relayed by several vendors) state that the configuration mitigations, including disabling
-> `session.upload_progress`, **do not prevent exploitation**. The guard above removes the same code
-> path as that setting, so assume it does not stop these two CVEs either. Keep it if you like, but
-> the protection that is certain before the patch is `hp_multipart_guard` in `block` mode (below),
-> and the fix is the official PHP release.
+**The fix is the official PHP release.** Install it the moment your vendor ships it. Until then, `block`
+is the only setting here that is certain; the other two are layers.
 
-> **Scope, stated plainly.** The guard removes one code path: PHP's `session.upload_progress`
-> bookkeeping. It helps exactly as far as the vulnerabilities live in that handler, which is what the
-> researchers who reproduced them reported before the official advisory. It does not replace the
-> patched PHP packages. Install those too.
+```ini
+extension=hp_uploadprogress_guard.so
+hp_uploadprogress_guard.mode = block
+hp_uploadprogress_guard.allow_ips = 203.0.113.10,203.0.113.11
+hp_uploadprogress_guard.detach_upload_progress = 1
+```
+
+Verify: `php --ri hp_uploadprogress_guard` (shows version, handler replaced, mode, detached).
+From outside: `curl -s -o /dev/null -w '%{http_code}' -F a=1 https://host/any.php` → `415` in block
+mode, `200` in parse mode; `-d a=1` → `200` in both.
+
+* `src/`: one C file plus `config.m4`, and `src/rfc1867/` with the per-branch parser copies.
+* `dist/`: prebuilt NTS x86_64 `.so` per PHP minor with `SHA256SUMS`.
+* `build.sh`: rebuilds `dist/` from the official `php:<X.Y>-cli` images.
+* `test/`: `test-modes.sh` (Docker: parse vs block, detach), `run-builtin-server.sh`, `fcgi-probe.py`, `probe.php`.
+* `ansible/`: the task files and ini templates Hosted Power deploys (Debian/Sury, cPanel EA4, DirectAdmin).
+
+Tests, 21 October 2026: parse mode behaves identically to PHP's parser on 8.4 (nested fields,
+unicode, awkward filenames, file arrays, checksum of the uploaded file, malformed body); block mode
+gives 415 with empty `$_POST`/`$_FILES`, urlencoded 200, GET 200, `ini_set` cannot override; builds
+and loads on 5.6 to 8.5; live on cPanel EA4 (8.1 to 8.4) and DirectAdmin CustomBuild (8.2 to 8.4)
+staging hosts, block mode exercised end to end on DirectAdmin (multipart 415, urlencoded 200, GET 200,
+then back to parse: 200).
 
 ---
+
+The sections below describe v1 (the detach alone) and why it was built. They are kept for the
+record; read the table above for what applies now.
 
 ## Why we built it
 
@@ -300,46 +316,6 @@ run for idempotency, then a full untagged deploy on the Debian test host):
 Per host afterwards: every version's `php -m` lists the module, `--ri` says detached, fpm masters
 map the library, conf.d/php.d/php.conf.d carry the ini.
 
-## multipart_guard: block mode and a patchable parser
-
-`hp_multipart_guard` replaces the SAPI post handler for `multipart/form-data` (the entry PHP
-registers for `main/rfc1867.c`) with its own at module init, which PHP allows before the SAPI
-starts. Two modes, set by `hp_multipart_guard.mode` (`PHP_INI_SYSTEM`: php.ini or pool config only,
-never `.user.ini`, `.htaccess` or `ini_set()`):
-
-* **`block`**: the request is refused *before any parsing*. The body is never read, `$_POST` and
-  `$_FILES` stay empty, the response code is set to 415 and a warning is logged. URL-encoded POSTs
-  and GETs are untouched. This is the emergency mode: it is the only thing that is certain to stop a
-  bug in the multipart parser when the bug itself is not yet known. Every upload and multipart form
-  fails while it is on, so pair it with `hp_multipart_guard.allow_ips` (comma separated client IPs
-  that are always parsed: your office, your monitoring) and switch back the moment you are patched.
-* **`parse`** (default): the request goes to a copy of PHP's own `rfc1867.c` compiled into the
-  module (`src/rfc1867/rfc1867_copy-<X.Y>.c`, one per branch). Today that copy is byte-for-byte the
-  upstream parser; the purpose is that a patched parser can be loaded on every PHP version and panel
-  the hour a fix is public, without rebuilding PHP. The copy does not pick up mbstring's
-  `encoding_translation` hooks (static callbacks stay unset), which only matters with that rarely
-  used setting On.
-
-Build: `multipart_guard/build.sh 8.4 8.3 ...` (official Docker images, like the guard). Prebuilt
-NTS x86_64 binaries with checksums in `multipart_guard/dist/`. Install exactly like the guard
-(`extension=hp_multipart_guard.so` in every SAPI's scan dir) and add:
-
-```ini
-hp_multipart_guard.mode = block
-hp_multipart_guard.allow_ips = 203.0.113.10,203.0.113.11
-```
-
-Verify: `php --ri hp_multipart_guard` shows `multipart/form-data handler replaced => yes` and the
-mode. From outside: `curl -s -o /dev/null -w '%{http_code}' -F a=1 https://host/any.php` returns
-`415` in block mode and `200` in parse mode; `-d a=1` returns `200` in both.
-
-Tests (21 October 2026): parse mode behaves identically to PHP's parser on 8.4 (`test.sh`: nested
-fields, unicode, awkward filenames, file arrays, checksum of the uploaded file, malformed body);
-block mode (`test-block.sh`): multipart 415 with empty `$_POST`/`$_FILES`, urlencoded 200, GET 200,
-`ini_set` cannot override. Builds and installs on 5.6 through 8.5. Live on two staging hosts
-(cPanel EA4 8.1 to 8.4, DirectAdmin CustomBuild 8.2 to 8.4), block mode exercised end to end on
-DirectAdmin.
-
 ## Repository layout
 
 ```
@@ -348,10 +324,6 @@ dist/       prebuilt NTS x86_64 .so per PHP minor + SHA256SUMS
 build.sh    rebuild dist/ from the official php:<X.Y>-cli images
 test/       probe.php, run-builtin-server.sh (Docker functional test), fcgi-probe.py (php-fpm direct)
 ansible/    the task files and ini files we deploy (Debian/Sury, cPanel EA4, DirectAdmin)
-multipart_guard/
-  src/      hp_multipart_guard.c, config.m4, rfc1867/ (per-branch copies of PHP's parser)
-  dist/     prebuilt NTS x86_64 .so per PHP minor + SHA256SUMS
-  build.sh, test.sh, test-block.sh
 ```
 
 ## License

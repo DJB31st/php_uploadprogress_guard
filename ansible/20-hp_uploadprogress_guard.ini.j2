@@ -1,0 +1,13 @@
+; configuration for php hp_uploadprogress_guard module - do not edit here (re-asserted by Ansible and the panel hooks).
+; Hosted Power mitigation for CVE-2026-109618 / CVE-2026-109619. v2: detaches ext/session's multipart
+; upload-progress handler AND owns PHP's multipart/form-data parser (copy of main/rfc1867.c inside the
+; module, so a patched parser ships without rebuilding PHP). Source: php/files/uploadprogress-guard/src.
+; Opt out with php_uploadprogress_guard_enabled: false (removes this file).
+extension=hp_uploadprogress_guard.so
+; parse = the module's copy of PHP's multipart parser; block = refuse every multipart/form-data request
+; before parsing (415, empty $_POST/$_FILES): emergency mode while no fix exists.
+hp_uploadprogress_guard.mode = {{ php_uploadprogress_guard_mode }}
+; client IPs that are always parsed, even in block mode (comma separated)
+hp_uploadprogress_guard.allow_ips = {{ php_uploadprogress_guard_allow_ips | join(',') }}
+; drop ext/session's upload-progress handler (session.upload_progress feature off, non-overridable)
+hp_uploadprogress_guard.detach_upload_progress = 1

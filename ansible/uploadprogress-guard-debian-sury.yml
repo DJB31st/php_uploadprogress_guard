@@ -1,9 +1,9 @@
 ---
-## Mitigation for CVE-2026-109618 / CVE-2026-109619 (ext/session multipart upload-progress handler).
-## A tiny extension (source + build script in files/uploadprogress-guard/src) detaches ext/session's
-## rfc1867 callback at module init, so the affected handler can no longer be reached by a request.
-## This is independent of session.upload_progress.enabled, which customers can flip back on from
-## .user.ini / ini_set(). Only the session.upload_progress feature is lost; uploads keep working.
+## Mitigation module for CVE-2026-109618 / CVE-2026-109619 (source + build script in files/uploadprogress-guard/src).
+## v2: detaches ext/session's upload-progress handler AND owns PHP's multipart/form-data parser (a copy of
+## main/rfc1867.c per PHP minor inside the module), so a patched parser ships without rebuilding PHP
+## (php_uploadprogress_guard_mode=parse) and multipart can be refused outright in an emergency (mode=block,
+## 415, body unread; php_uploadprogress_guard_allow_ips stays parsed). Settings are PHP_INI_SYSTEM.
 ## Applied to EVERY installed php-fpm version (also phpmyadmin's dedicated one), not only the vhost
 ## versions, since any php endpoint parses multipart bodies before the application runs.
 ## Debian/Sury only: the .so files are built per PHP minor against the NTS API Sury ships, and are
@@ -41,8 +41,8 @@
       notify: restart php-fpm uploadprogress guard versions
 
     - name: hp_uploadprogress_guard.ini -> /etc/php/{{ item }}/mods-available/hp_uploadprogress_guard.ini
-      ansible.builtin.copy:
-        src: hp_uploadprogress_guard.ini
+      ansible.builtin.template:
+        src: hp_uploadprogress_guard.ini.j2
         dest: "/etc/php/{{ item }}/mods-available/hp_uploadprogress_guard.ini"
         mode: '0644'
       loop: "{{ php_uploadprogress_guard_versions }}"

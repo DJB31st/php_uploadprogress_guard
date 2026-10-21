@@ -38,9 +38,15 @@
         src: "{{ item }}"
         dest: "/usr/local/hostedpower/php-modules/{{ item | basename }}"
         mode: '0644'
-      loop: "{{ lookup('ansible.builtin.fileglob', 'uploadprogress-guard/*.so', wantlist=True) + ['20-hp_uploadprogress_guard.ini'] }}"
+      loop: "{{ lookup('ansible.builtin.fileglob', 'uploadprogress-guard/*.so', wantlist=True) }}"
       loop_control:
         label: "{{ item | basename }}"
+
+    - name: 20-hp_uploadprogress_guard.ini -> /usr/local/hostedpower/php-modules/ (source for the hook)
+      ansible.builtin.template:
+        src: 20-hp_uploadprogress_guard.ini.j2
+        dest: /usr/local/hostedpower/php-modules/20-hp_uploadprogress_guard.ini
+        mode: '0644'
 
     - name: hp_uploadprogress_guard-{{ item }}.so -> /opt/cpanel/ea-php{{ item | replace('.', '') }}/root/usr/lib64/php/modules/hp_uploadprogress_guard.so
       ansible.builtin.copy:
@@ -51,8 +57,8 @@
       notify: restart ea-php-fpm uploadprogress guard
 
     - name: 20-hp_uploadprogress_guard.ini -> /opt/cpanel/ea-php{{ item | replace('.', '') }}/root/etc/php.d/20-hp_uploadprogress_guard.ini
-      ansible.builtin.copy:
-        src: 20-hp_uploadprogress_guard.ini
+      ansible.builtin.template:
+        src: 20-hp_uploadprogress_guard.ini.j2
         dest: "/opt/cpanel/ea-php{{ item | replace('.', '') }}/root/etc/php.d/20-hp_uploadprogress_guard.ini"
         mode: '0644'
       loop: "{{ php_uploadprogress_guard_versions }}"

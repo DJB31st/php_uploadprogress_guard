@@ -5,11 +5,12 @@
 ## (directadmin/files/php_turbostack.sh) re-installs the same files after every PHP (re)build, from the staged
 ## copies in /usr/local/hostedpower/php-modules.
 
+## file_type any: older CustomBuild builds ship bin/php as a symlink to bin/phpXY.
 - name: Discover installed CustomBuild php versions -> /usr/local/phpXY/bin/php
   ansible.builtin.find:
     paths: /usr/local
     patterns: 'php'
-    file_type: file
+    file_type: any
     recurse: true
     depth: 3
   register: php_uploadprogress_guard_da_binaries
@@ -39,9 +40,15 @@
         src: "{{ item }}"
         dest: "/usr/local/hostedpower/php-modules/{{ item | basename }}"
         mode: '0644'
-      loop: "{{ lookup('ansible.builtin.fileglob', 'uploadprogress-guard/*.so', wantlist=True) + ['20-hp_uploadprogress_guard.ini'] }}"
+      loop: "{{ lookup('ansible.builtin.fileglob', 'uploadprogress-guard/*.so', wantlist=True) }}"
       loop_control:
         label: "{{ item | basename }}"
+
+    - name: 20-hp_uploadprogress_guard.ini -> /usr/local/hostedpower/php-modules/ (source for the hook)
+      ansible.builtin.template:
+        src: 20-hp_uploadprogress_guard.ini.j2
+        dest: /usr/local/hostedpower/php-modules/20-hp_uploadprogress_guard.ini
+        mode: '0644'
 
     - name: hp_uploadprogress_guard-{{ item.item }}.so -> {{ item.stdout }}/hp_uploadprogress_guard.so
       ansible.builtin.copy:
@@ -54,8 +61,8 @@
       notify: restart da php-fpm uploadprogress guard versions
 
     - name: 20-hp_uploadprogress_guard.ini -> /usr/local/php{{ item | replace('.', '') }}/lib/php.conf.d/20-hp_uploadprogress_guard.ini
-      ansible.builtin.copy:
-        src: 20-hp_uploadprogress_guard.ini
+      ansible.builtin.template:
+        src: 20-hp_uploadprogress_guard.ini.j2
         dest: "/usr/local/php{{ item | replace('.', '') }}/lib/php.conf.d/20-hp_uploadprogress_guard.ini"
         mode: '0644'
       loop: "{{ php_uploadprogress_guard_versions }}"
