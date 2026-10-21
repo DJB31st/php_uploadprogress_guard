@@ -1,6 +1,6 @@
 # hp_uploadprogress_guard
 
-**v3.0.0, 21 October 2026.** A small PHP extension that closes the multipart path of
+**v3.0.1, 21 October 2026.** A small PHP extension that closes the multipart path of
 CVE-2026-109618 / CVE-2026-109619 on an unpatched PHP, built from the official fix now that it is
 public, without rebuilding PHP and without changing anything for the applications on the host. Built
 by [Hosted Power](https://www.hosted-power.com) for its own fleet, published for everyone. PHP 5.6
