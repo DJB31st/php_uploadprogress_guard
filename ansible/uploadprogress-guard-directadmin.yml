@@ -1,0 +1,87 @@
+---
+## Mitigation for CVE-2026-109618 / CVE-2026-109619 on DirectAdmin CustomBuild -- see uploadprogress-guard.yml (Sury).
+## CustomBuild layout: /usr/local/phpXY/lib/php/extensions/no-debug-non-zts-<API> (extension_dir, queried from the
+## binary) + /usr/local/phpXY/lib/php.conf.d/NN-name.ini. The CustomBuild post-php hook
+## (directadmin/files/php_turbostack.sh) re-installs the same files after every PHP (re)build, from the staged
+## copies in /usr/local/hostedpower/php-modules.
+
+- name: Discover installed CustomBuild php versions -> /usr/local/phpXY/bin/php
+  ansible.builtin.find:
+    paths: /usr/local
+    patterns: 'php'
+    file_type: file
+    recurse: true
+    depth: 3
+  register: php_uploadprogress_guard_da_binaries
+
+## Only versions with a shipped .so (files/uploadprogress-guard/hp_uploadprogress_guard-X.Y.so, 5.6-8.5).
+- name: set fact php_uploadprogress_guard_versions
+  ansible.builtin.set_fact:
+    php_uploadprogress_guard_versions: "{{ php_uploadprogress_guard_da_binaries.files | map(attribute='path') | select('match', '^/usr/local/php[0-9]+/bin/php$') | map('regex_replace', '^/usr/local/php([0-9])([0-9]+)/bin/php$', '\\1.\\2') | intersect(php_uploadprogress_guard_shipped_versions) | sort }}"
+  vars:
+    php_uploadprogress_guard_shipped_versions: "{{ lookup('ansible.builtin.fileglob', 'uploadprogress-guard/*.so') | regex_findall('-([0-9]+\\.[0-9]+)\\.so') }}"
+
+- name: Query extension_dir of php {{ php_uploadprogress_guard_versions | join(', ') }}
+  ansible.builtin.command: "/usr/local/php{{ item | replace('.', '') }}/bin/php -n -r 'echo PHP_EXTENSION_DIR;'"
+  loop: "{{ php_uploadprogress_guard_versions }}"
+  register: php_uploadprogress_guard_extension_dirs
+  changed_when: false
+
+- block:
+    - name: Create directory -> /usr/local/hostedpower/php-modules (source for the CustomBuild php hook)
+      ansible.builtin.file:
+        path: /usr/local/hostedpower/php-modules
+        state: directory
+        mode: '0755'
+
+    - name: Stage hp_uploadprogress_guard-X.Y.so + 20-hp_uploadprogress_guard.ini -> /usr/local/hostedpower/php-modules/
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "/usr/local/hostedpower/php-modules/{{ item | basename }}"
+        mode: '0644'
+      loop: "{{ lookup('ansible.builtin.fileglob', 'uploadprogress-guard/*.so', wantlist=True) + ['20-hp_uploadprogress_guard.ini'] }}"
+      loop_control:
+        label: "{{ item | basename }}"
+
+    - name: hp_uploadprogress_guard-{{ item.item }}.so -> {{ item.stdout }}/hp_uploadprogress_guard.so
+      ansible.builtin.copy:
+        src: "uploadprogress-guard/hp_uploadprogress_guard-{{ item.item }}.so"
+        dest: "{{ item.stdout }}/hp_uploadprogress_guard.so"
+        mode: '0644'
+      loop: "{{ php_uploadprogress_guard_extension_dirs.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      notify: restart da php-fpm uploadprogress guard versions
+
+    - name: 20-hp_uploadprogress_guard.ini -> /usr/local/php{{ item | replace('.', '') }}/lib/php.conf.d/20-hp_uploadprogress_guard.ini
+      ansible.builtin.copy:
+        src: 20-hp_uploadprogress_guard.ini
+        dest: "/usr/local/php{{ item | replace('.', '') }}/lib/php.conf.d/20-hp_uploadprogress_guard.ini"
+        mode: '0644'
+      loop: "{{ php_uploadprogress_guard_versions }}"
+      notify: restart da php-fpm uploadprogress guard versions
+
+  when: php_uploadprogress_guard_enabled | bool
+
+- block:
+    - name: Remove 20-hp_uploadprogress_guard.ini -> /usr/local/php{{ item | replace('.', '') }}/lib/php.conf.d/
+      ansible.builtin.file:
+        path: "/usr/local/php{{ item | replace('.', '') }}/lib/php.conf.d/20-hp_uploadprogress_guard.ini"
+        state: absent
+      loop: "{{ php_uploadprogress_guard_versions }}"
+      notify: restart da php-fpm uploadprogress guard versions
+
+    - name: Remove hp_uploadprogress_guard.so -> {{ item.stdout }}/hp_uploadprogress_guard.so
+      ansible.builtin.file:
+        path: "{{ item.stdout }}/hp_uploadprogress_guard.so"
+        state: absent
+      loop: "{{ php_uploadprogress_guard_extension_dirs.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Remove directory -> /usr/local/hostedpower/php-modules
+      ansible.builtin.file:
+        path: /usr/local/hostedpower/php-modules
+        state: absent
+
+  when: not php_uploadprogress_guard_enabled | bool

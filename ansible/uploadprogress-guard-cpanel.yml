@@ -1,0 +1,76 @@
+---
+## Mitigation for CVE-2026-109618 / CVE-2026-109619 on cPanel EA4 -- see uploadprogress-guard.yml (Sury) for the why.
+## EA4 layout: /opt/cpanel/ea-phpXY/root/usr/lib64/php/modules (extension_dir) + root/etc/php.d/NN-name.ini, read by
+## every SAPI (cgi, fpm, lsapi, dso). The ea-php universal hook (cpanel/files/480-hostedpower_php) installs the same
+## files into versions a customer adds later via WHM, from the staged copies in /usr/local/hostedpower/php-modules.
+
+- name: Discover cPanel ea-php directories -> /opt/cpanel/ea-php*
+  ansible.builtin.find:
+    paths: /opt/cpanel
+    patterns: 'ea-php[0-9]*'
+    file_type: directory
+    recurse: false
+  register: php_uploadprogress_guard_ea_roots
+
+## A removed ea-php leaves its /opt/cpanel/ea-phpXY directory behind: only versions whose php binary exists count.
+- name: Check which ea-php versions are really installed -> /opt/cpanel/ea-phpXY/root/usr/bin/php
+  ansible.builtin.stat:
+    path: "/opt/cpanel/ea-php{{ item | replace('.', '') }}/root/usr/bin/php"
+  loop: "{{ php_uploadprogress_guard_ea_roots.files | map(attribute='path') | map('basename') | map('regex_replace', '^ea-php([0-9])([0-9]+)$', '\\1.\\2') | sort }}"
+  register: php_uploadprogress_guard_ea_binaries
+
+## Only versions with a shipped .so (files/uploadprogress-guard/hp_uploadprogress_guard-X.Y.so, 5.6-8.5).
+- name: set fact php_uploadprogress_guard_versions
+  ansible.builtin.set_fact:
+    php_uploadprogress_guard_versions: "{{ php_uploadprogress_guard_ea_binaries.results | selectattr('stat.exists') | map(attribute='item') | intersect(php_uploadprogress_guard_shipped_versions) | sort }}"
+  vars:
+    php_uploadprogress_guard_shipped_versions: "{{ lookup('ansible.builtin.fileglob', 'uploadprogress-guard/*.so') | regex_findall('-([0-9]+\\.[0-9]+)\\.so') }}"
+
+- block:
+    - name: Create directory -> /usr/local/hostedpower/php-modules (source for the ea-php hook)
+      ansible.builtin.file:
+        path: /usr/local/hostedpower/php-modules
+        state: directory
+        mode: '0755'
+
+    - name: Stage hp_uploadprogress_guard-X.Y.so + 20-hp_uploadprogress_guard.ini -> /usr/local/hostedpower/php-modules/
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "/usr/local/hostedpower/php-modules/{{ item | basename }}"
+        mode: '0644'
+      loop: "{{ lookup('ansible.builtin.fileglob', 'uploadprogress-guard/*.so', wantlist=True) + ['20-hp_uploadprogress_guard.ini'] }}"
+      loop_control:
+        label: "{{ item | basename }}"
+
+    - name: hp_uploadprogress_guard-{{ item }}.so -> /opt/cpanel/ea-php{{ item | replace('.', '') }}/root/usr/lib64/php/modules/hp_uploadprogress_guard.so
+      ansible.builtin.copy:
+        src: "uploadprogress-guard/hp_uploadprogress_guard-{{ item }}.so"
+        dest: "/opt/cpanel/ea-php{{ item | replace('.', '') }}/root/usr/lib64/php/modules/hp_uploadprogress_guard.so"
+        mode: '0644'
+      loop: "{{ php_uploadprogress_guard_versions }}"
+      notify: restart ea-php-fpm uploadprogress guard
+
+    - name: 20-hp_uploadprogress_guard.ini -> /opt/cpanel/ea-php{{ item | replace('.', '') }}/root/etc/php.d/20-hp_uploadprogress_guard.ini
+      ansible.builtin.copy:
+        src: 20-hp_uploadprogress_guard.ini
+        dest: "/opt/cpanel/ea-php{{ item | replace('.', '') }}/root/etc/php.d/20-hp_uploadprogress_guard.ini"
+        mode: '0644'
+      loop: "{{ php_uploadprogress_guard_versions }}"
+      notify: restart ea-php-fpm uploadprogress guard
+
+  when: php_uploadprogress_guard_enabled | bool
+
+- block:
+    - name: Remove hp_uploadprogress_guard ini + .so -> /opt/cpanel/ea-php{{ item.0 | replace('.', '') }}/root/{{ item.1 }}
+      ansible.builtin.file:
+        path: "/opt/cpanel/ea-php{{ item.0 | replace('.', '') }}/root/{{ item.1 }}"
+        state: absent
+      loop: "{{ php_uploadprogress_guard_versions | product(['etc/php.d/20-hp_uploadprogress_guard.ini', 'usr/lib64/php/modules/hp_uploadprogress_guard.so']) | list }}"
+      notify: restart ea-php-fpm uploadprogress guard
+
+    - name: Remove directory -> /usr/local/hostedpower/php-modules
+      ansible.builtin.file:
+        path: /usr/local/hostedpower/php-modules
+        state: absent
+
+  when: not php_uploadprogress_guard_enabled | bool

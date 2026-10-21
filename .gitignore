@@ -1,0 +1,11 @@
+*.o
+*.lo
+*.la
+.libs/
+modules/
+autom4te.cache/
+config.h*
+configure*
+Makefile*
+run-tests.php
+build/
