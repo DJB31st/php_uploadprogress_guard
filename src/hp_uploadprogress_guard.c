@@ -68,16 +68,45 @@
 #include "zend_extensions.h"
 #include <string.h>
 #include <stdarg.h>
+#ifdef PHP_WIN32
+#include <io.h>
+#include <process.h>
+#include <windows.h>
+#define HP_UPG_UNLINK _unlink
+#else
 #include <unistd.h>
+#define HP_UPG_UNLINK unlink
+#endif
 
-/* Weak references to symbols only the fixed engines export (see the header comment): the dynamic linker
- * leaves them NULL on an engine without the fix. Local names via asm labels, so they never clash with
- * the declarations of a patched php-src header. No dlsym(): that would bind to a glibc version. */
+/* Probe for the symbols only the fixed engines export (see the header comment).
+ * ELF: weak references, left NULL by the dynamic linker on an engine without the fix; local names via
+ * asm labels so they never clash with a patched php-src header; no dlsym(), that would bind a glibc version.
+ * Windows: GetProcAddress() on the module that exports the engine (php8.dll, php8ts.dll, ...), found
+ * from the address of any engine function. */
+#ifdef PHP_WIN32
+static int hp_upg_engine_exports(const char *name)
+{
+	HMODULE m = NULL;
+	if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+			(LPCSTR) (void *) zend_hash_str_find_ptr, &m) || !m) {
+		return 0;
+	}
+	return GetProcAddress(m, name) != NULL;
+}
+#define hp_upg_sym_delayed_oom   (hp_upg_engine_exports("zend_handle_delayed_oom") ? (void *) 1 : NULL)
+#define hp_upg_sym_safe_error_ex (hp_upg_engine_exports("zend_mm_safe_error_ex") ? (void *) 1 : NULL)
+#else
 extern void hp_upg_sym_delayed_oom(void) __asm__("zend_handle_delayed_oom") __attribute__((weak));
 extern void hp_upg_sym_safe_error_ex(void) __asm__("zend_mm_safe_error_ex") __attribute__((weak));
+#endif
 
 #define HP_MPG_VERSION "3.1.0"
 #define HP_MPG_NAME "hp_uploadprogress_guard"
+
+/* thread-safe (ZTS) builds, PHP 7+: per-thread globals cache (no-op on NTS) */
+#if defined(ZTS) && PHP_VERSION_ID >= 70000
+ZEND_TSRMLS_CACHE_DEFINE()
+#endif
 
 SAPI_API SAPI_POST_HANDLER_FUNC(hp_rfc1867_post_handler);
 static SAPI_POST_HANDLER_FUNC(hp_upg_dispatch);
@@ -117,7 +146,7 @@ static void hp_upg_unlink_uploads(void)
 		ulong idx;
 		zend_hash_internal_pointer_reset_ex(ht, &pos);
 		while (zend_hash_get_current_key_ex(ht, &key, &klen, &idx, 0, &pos) == HASH_KEY_IS_STRING) {
-			unlink(key);
+			HP_UPG_UNLINK(key);
 			zend_hash_move_forward_ex(ht, &pos);
 		}
 	}
@@ -126,7 +155,7 @@ static void hp_upg_unlink_uploads(void)
 		zend_string *key;
 		ZEND_HASH_FOREACH_STR_KEY(ht, key) {
 			if (key) {
-				unlink(ZSTR_VAL(key));
+				HP_UPG_UNLINK(ZSTR_VAL(key));
 			}
 		} ZEND_HASH_FOREACH_END();
 	}
@@ -167,9 +196,9 @@ static void hp_upg_error_cb(int type, const char *error_filename, const uint32_t
 }
 #else
 /* PHP 5.6 - 7.4: const char* filename + printf format/va_list (the format string carries the message text) */
-static void (*hp_upg_orig_error_cb)(int type, const char *error_filename, const uint error_lineno, const char *format, va_list args) = NULL;
+static void (*hp_upg_orig_error_cb)(int type, const char *error_filename, const unsigned int error_lineno, const char *format, va_list args) = NULL;
 
-static void hp_upg_error_cb(int type, const char *error_filename, const uint error_lineno, const char *format, va_list args)
+static void hp_upg_error_cb(int type, const char *error_filename, const unsigned int error_lineno, const char *format, va_list args)
 {
 	if (type == E_ERROR && EG(current_execute_data) == NULL && hp_upg_is_oom_message(format)) {
 		hp_upg_oom_exit();
@@ -260,6 +289,9 @@ static zend_op_array *hp_upg_compile_file(zend_file_handle *file_handle, int typ
 
 static PHP_RINIT_FUNCTION(hp_uploadprogress_guard)
 {
+#if defined(ZTS) && PHP_VERSION_ID >= 70000
+	ZEND_TSRMLS_CACHE_UPDATE();
+#endif
 #if PHP_VERSION_ID >= 80100
 	if (!hp_upg_compile_hooked && !hp_upg_php_patched && zend_get_extension("Zend OPcache")) {
 		hp_upg_orig_compile_file = zend_compile_file;
@@ -531,6 +563,9 @@ static SAPI_POST_HANDLER_FUNC(hp_upg_dispatch)
 
 static PHP_MINIT_FUNCTION(hp_uploadprogress_guard)
 {
+#if defined(ZTS) && PHP_VERSION_ID >= 70000
+	ZEND_TSRMLS_CACHE_UPDATE();
+#endif
 	REGISTER_INI_ENTRIES();
 	hp_upg_detect_patched();
 #ifdef HP_UPG_TEST_FORCE_PARSE

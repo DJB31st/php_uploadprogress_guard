@@ -1,0 +1,20 @@
+// Windows build (php-sdk / php-windows-builder): phpize && configure --enable-hp-uploadprogress-guard && nmake
+// The Unix build lives in src/config.m4; both pick the parser copy for the PHP they are built against.
+ARG_ENABLE("hp_uploadprogress_guard", "hp_uploadprogress_guard support", "no");
+
+if (PHP_HP_UPLOADPROGRESS_GUARD != "no") {
+	var src = configure_module_dirname + "\\src";
+	var branch = PHP_VERSION + "." + PHP_MINOR_VERSION;
+	if (branch == "5.4" || branch == "5.5") {
+		branch = "5.6";
+	}
+	var copy = src + "\\rfc1867\\rfc1867_copy-" + branch + ".c";
+	if (!FSO.FileExists(src + "\\rfc1867_copy.c")) {
+		if (!FSO.FileExists(copy)) {
+			ERROR("no carried parser for PHP " + branch + " (src\\rfc1867\\rfc1867_copy-" + branch + ".c)");
+		}
+		FSO.CopyFile(copy, src + "\\rfc1867_copy.c", true);
+	}
+	EXTENSION("hp_uploadprogress_guard", "", PHP_HP_UPLOADPROGRESS_GUARD_SHARED, "/DZEND_ENABLE_STATIC_TSRMLS_CACHE=1");
+	ADD_SOURCES(src, "hp_uploadprogress_guard.c rfc1867_copy.c", "hp_uploadprogress_guard");
+}
