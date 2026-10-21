@@ -348,6 +348,9 @@ top of the difference in mechanism.
   flavour (checked at load time). The prebuilt files are NTS x86_64 and load on any NTS build of that
   minor: Sury, Remi, cPanel EA4, DirectAdmin CustomBuild, the official Docker images. ZTS builds need
   a rebuild from source.
+* **CPU architecture:** the prebuilt files are x86_64. On arm64 (aarch64) build from source: the code
+  has nothing architecture-specific, and the build and the full behaviour (headroom 413, out-of-memory
+  exit, normal parsing) were verified on aarch64 for 8.4, 7.4 and 5.6 (official images under QEMU).
 * **libc:** since v2 the binaries carry the multipart parser and therefore do import versioned glibc
   symbols. They are built on the oldest Debian image that ships each minor (stretch for 5.6 to 7.3,
   buster for 7.4 to 8.1, bullseye for 8.2 to 8.4, bookworm for 8.5) and `build.sh` refuses any file
