@@ -28,17 +28,6 @@
 #include "php_globals.h"
 #include "php_variables.h"
 #include "rfc1867.h"
-/* hp_uploadprogress_guard compat shim: the fixed parser from the patched PHP release, built against the
- * headers of the unpatched PHP it will be loaded into. The delayed-OOM engine change (ZEND_HAS_OOM,
- * safe_ferealloc) cannot be carried by a module; those checks compile to the pre-fix behaviour here.
- * The multipart hardening (header de-duplication, post_max_size enforcement) is what this copy adds. */
-#ifndef ZEND_HAS_OOM
-#define ZEND_HAS_OOM() 0
-#endif
-#ifndef safe_ferealloc
-#define safe_ferealloc(ptr, nmemb, size, offset, fallible) safe_erealloc((ptr), (nmemb), (size), (offset))
-#endif
-
 #include "zend_smart_string.h"
 #include "zend_exceptions.h"
 
@@ -66,6 +55,61 @@ static php_rfc1867_basename_t php_rfc1867_basename = NULL;
 #undef php_rfc1867_callback
 static zend_result (*_hp_dead_cb)(unsigned int, void *, void **) = NULL;
 #define php_rfc1867_callback _hp_dead_cb
+
+/* hp_uploadprogress_guard v3: this parser never exhausts memory_limit, so the pre-RINIT out-of-memory
+ * bailout that CVE-2026-109618 is built on cannot be reached through multipart input. zend_memory_usage(1)
+ * is the figure the allocator compares with the limit. HP_MEM_SLACK covers the chunk the next small
+ * allocation may need; an eighth of the limit (at least 4 MB) stays free for RINIT and the script. When a
+ * step would cross that line the request is stopped, everything parsed so far is dropped and the response
+ * code is set to 413, mirroring the patched engine, which fails such a request. */
+#define HP_MEM_CHUNK ((size_t) 2 * 1024 * 1024)
+#define HP_MEM_SLACK ((size_t) 4 * 1024 * 1024)
+#define HP_MAX_HDR_VALUE ((size_t) 64 * 1024)
+static int hp_stopped = 0;
+
+static int hp_mem_room(size_t need)
+{
+	size_t limit, used, reserve;
+
+	if (PG(memory_limit) <= 0) {
+		return 1;
+	}
+	limit = (size_t) PG(memory_limit);
+	reserve = limit / 8 < HP_MEM_SLACK ? HP_MEM_SLACK : limit / 8;
+	used = zend_memory_usage(1);
+	need = (need + HP_MEM_CHUNK - 1) & ~(HP_MEM_CHUNK - 1);
+	return used + need + HP_MEM_SLACK + reserve <= limit;
+}
+
+static void hp_drop_request(zval *post_array)
+{
+	char msg[256];
+
+	if (Z_TYPE_P(post_array) == IS_ARRAY) {
+		zend_hash_clean(Z_ARRVAL_P(post_array));
+	}
+	if (Z_TYPE(PG(http_globals)[TRACK_VARS_FILES]) == IS_ARRAY) {
+		zend_hash_clean(Z_ARRVAL(PG(http_globals)[TRACK_VARS_FILES]));
+	}
+	SG(sapi_headers).http_response_code = 413;
+	snprintf(msg, sizeof(msg), "hp_uploadprogress_guard: multipart body dropped, memory headroom exhausted "
+		"(memory_limit=%ld post_max_size=%ld read=%ld); request answered 413",
+		(long) PG(memory_limit), (long) SG(post_max_size), (long) SG(read_post_bytes));
+	php_log_err(msg);
+}
+
+static void *hp_safe_ferealloc(void *ptr, size_t nmemb, size_t size, size_t offset)
+{
+	if (!hp_mem_room(2 * (nmemb * size + offset))) {
+		hp_stopped = 1;
+		return NULL;
+	}
+	return safe_erealloc(ptr, nmemb, size, offset);
+}
+#undef ZEND_HAS_OOM
+#define ZEND_HAS_OOM() (hp_stopped)
+#undef safe_ferealloc
+#define safe_ferealloc(ptr, nmemb, size, offset, fallible) hp_safe_ferealloc((ptr), (nmemb), (size), (offset))
 
 static bool safe_php_register_variable(char *var, char *strval, size_t val_len, zval *track_vars_array, bool override_protection);
 
@@ -448,9 +492,25 @@ static int multipart_buffer_headers(multipart_buffer *self, zend_llist *header)
 				key = estrdup(line);
 				do { value++; } while (isspace((unsigned char)*value));
 				smart_string_appends(&buf_value, value);
+				if (buf_value.len > HP_MAX_HDR_VALUE) {
+					hp_stopped = 1;
+					if (key) {
+						efree(key);
+					}
+					smart_string_free(&buf_value);
+					return 0;
+				}
 			}
 		} else if (buf_value.c) { /* If no ':' on the line, add to previous line */
 			smart_string_appends(&buf_value, line);
+			if (buf_value.len > HP_MAX_HDR_VALUE) {
+				hp_stopped = 1;
+				if (key) {
+					efree(key);
+				}
+				smart_string_free(&buf_value);
+				return 0;
+			}
 		} else {
 			continue;
 		}
@@ -746,6 +806,7 @@ SAPI_API SAPI_POST_HANDLER_FUNC(hp_rfc1867_post_handler)
 		_basename = php_ap_basename;
 	}
 
+	hp_stopped = 0;
 	if (post_max_size > 0 && SG(request_info).content_length > post_max_size) {
 		EMIT_WARNING_OR_ERROR("POST Content-Length of " ZEND_LONG_FMT " bytes exceeds the limit of " ZEND_LONG_FMT " bytes", SG(request_info).content_length, post_max_size);
 		return;
@@ -838,6 +899,11 @@ SAPI_API SAPI_POST_HANDLER_FUNC(hp_rfc1867_post_handler)
 		zend_off_t offset;
 
 		zend_llist_clean(&header);
+
+		if (hp_stopped || !hp_mem_room(0)) {
+			hp_stopped = 1;
+			goto fileupload_done;
+		}
 
 		if (ZEND_HAS_OOM()) {
 			/* A previous body part has reached the soft memory limit: Stop here */
@@ -1459,6 +1525,10 @@ fileupload_done:
 	if (mbuff->boundary) efree(mbuff->boundary);
 	if (mbuff->buffer) efree(mbuff->buffer);
 	if (mbuff) efree(mbuff);
+
+	if (hp_stopped) {
+		hp_drop_request(array_ptr);
+	}
 
 #undef EMIT_WARNING_OR_ERROR
 }

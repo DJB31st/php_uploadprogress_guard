@@ -4,7 +4,10 @@
  * At MINIT the SAPI post entry for multipart/form-data (main/rfc1867.c's handler) is replaced by
  * ours. Two modes, selected by the INI_SYSTEM setting hp_uploadprogress_guard.mode:
  *   parse  (default) hand the request to the copy of main/rfc1867.c compiled into this module
- *                    (rfc1867_copy.c), so a patched parser can ship without rebuilding PHP.
+ *                    (rfc1867_copy.c): the parser of the fixed PHP release, with ext/session's
+ *                    upload-progress callback compiled out and, since v3, a memory-headroom guard
+ *                    that stops the request (413, $_POST/$_FILES dropped) before any step could
+ *                    exhaust memory_limit, so no out-of-memory bailout can start inside the parser.
  *   native           leave PHP's own parser in place (use once the patched PHP packages are installed);
  *                    "off" is not usable as a value because PHP's ini parser turns it into ""
  *   block            refuse the request before any parsing: the body is never read, $_POST and
@@ -27,7 +30,7 @@
 #include "ext/standard/php_versioning.h"
 #include <string.h>
 
-#define HP_MPG_VERSION "2.2.0"
+#define HP_MPG_VERSION "3.0.0"
 #define HP_MPG_NAME "hp_uploadprogress_guard"
 
 SAPI_API SAPI_POST_HANDLER_FUNC(hp_rfc1867_post_handler);
@@ -178,6 +181,7 @@ static PHP_MINFO_FUNCTION(hp_uploadprogress_guard)
 	php_info_print_table_row(2, "version", HP_MPG_VERSION);
 	php_info_print_table_row(2, "multipart/form-data handler replaced", hp_upg_installed ? "yes" : "no");
 	php_info_print_table_row(2, "mode", INI_STR("hp_uploadprogress_guard.mode"));
+	php_info_print_table_row(2, "parser memory-headroom guard", hp_upg_installed ? "yes (memory_limit > 0)" : "no (parser not replaced)");
 	php_info_print_table_row(2, "running PHP already carries the official fix", hp_upg_php_patched ? (hp_upg_installed ? "yes" : "yes (parser replacement skipped)") : "no");
 	php_info_print_table_row(2, "session.upload_progress handler detached", hp_upg_detached ? "yes" : "no");
 	php_info_print_table_end();
