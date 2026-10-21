@@ -1,14 +1,18 @@
 # hp_uploadprogress_guard
 
-**v3.0.2, 21 October 2026.** A small PHP extension that closes the multipart path of
-CVE-2026-109618 / CVE-2026-109619 on an unpatched PHP, built from the official fix now that it is
-public, without rebuilding PHP and without changing anything for the applications on the host. Built
-by [Hosted Power](https://www.hosted-power.com) for its own fleet, published for everyone. PHP 5.6
-through 8.5; Sury, Remi, cPanel EA4, DirectAdmin CustomBuild, official Docker images.
+**v3.1.0, 21 October 2026.** A small PHP extension that mirrors the official fix for
+CVE-2026-109618 / CVE-2026-109619 component by component, so that on an unpatched PHP every link of
+the published attack chain is removed, without rebuilding PHP and without changing anything for the
+applications on the host. Built by [Hosted Power](https://www.hosted-power.com) for its own fleet,
+published for everyone. PHP 5.6 through 8.5; Sury, Remi, cPanel EA4, DirectAdmin CustomBuild, official
+Docker images. On a PHP that already carries the fix, vendor backports included, it notices and steps
+aside.
 
 **The fix is the official PHP release** (8.5.12, 8.4.27, 8.3.36, 8.2.35, plus the PHP team's minimal
-backports for 7.4, 8.0 and 8.1). Install it as soon as your vendor ships packages. This module is for
-the hours or days until then, and for the versions nobody will patch. Read the advisories:
+backports for 7.4, 8.0 and 8.1, which Sury applied to 5.6 through 7.3 as well), and we recommend it
+without reservation. This module is realistic protection in its own right: for the time until your
+vendor ships packages, for the installs that cannot be upgraded, and as a second layer that stays
+useful after the upgrade because it steps aside by itself. Read the advisories:
 [GHSA-w8hw-w9fx-j79w](https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w) and
 [GHSA-6wmf-4rv5-p3rp](https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp).
 
@@ -44,6 +48,43 @@ scanners and customers. The module now writes the master value to `0` at startup
 `.htaccess` or `ini_set()` cannot change it. No other behaviour changed; binaries rebuilt for 5.6 to 8.5
 with the same glibc floor.
 
+**v3.1.0** (same day, evening): the rest of the official fix, mirrored. v3.0 covered the multipart
+parser; v3.1 covers what the patch does outside it. Nothing changes for applications: uploads, forms, error handlers and warnings behave as
+before. In detail:
+
+* **Out-of-memory exit.** If memory still runs out while no script is executing (request startup or
+  shutdown: PHP's own parser in `native` mode or the `mbstring.encoding_translation` case, a genuine
+  out-of-memory from the operating system), the process ends with `_exit(137)` after unlinking the
+  upload temp files it registered, instead of staying alive with half-cleaned state. That is what the
+  official hard memory limit does, and what the PHP team chose for every memory exhaustion in the
+  backports. php-fpm already discards a worker whose request startup failed; this matters for mod_php,
+  LiteSpeed, FrankenPHP and any other SAPI that keeps the process.
+* **Request state cleared at request end.** The patch writes safe values over a set of pointers the
+  engine leaves behind at shutdown (user error and exception handlers, recorded errors, the object
+  store, the superglobals, the `request_info` strings, on 8.5 the saved fatal-error backtrace), so that
+  a warning raised before the next request's executor starts (an invalid `php_value` in `.htaccess`,
+  a `PHP_VALUE` from the web server) finds nothing stale. The module writes the same values, a few
+  steps later, in its post-deactivate function and in a wrapper around the SAPI's deactivate callback.
+* **OPcache's compile window cannot run out of memory** (8.1 and later). The one part of the patch
+  without a module equivalent is OPcache's deferred publication of class-cache slots in shared memory,
+  which guards against a bailout while OPcache stores a freshly compiled script. The module keeps that
+  window from bailing out instead: `memory_limit` is lifted while OPcache compiles and stores a script
+  and restored right after, and the lift is visible in `--ri`.
+* **Fix detection by symbol, not by version number.** Engines that carry the fix export a symbol the
+  old ones lack (`zend_handle_delayed_oom` on 8.2 and later, `zend_mm_safe_error_ex` in the backports).
+  The module checks for them through weak references (no `dlsym`, no glibc dependency), so vendor
+  backports that keep their version number are recognised too. Verified on Sury's packages of
+  21 October for 5.6, 7.0, 7.3, 7.4, 8.1 and 8.3: the module reports the fix and steps aside. Sury ships
+  fixed packages for every branch from 5.6 to 8.5.
+* **`hp_uploadprogress_guard.force_unlimited_memory = 1`**, opt-in: the advisories' `memory_limit=-1`
+  mitigation, written as master value and locked at `PHP_INI_SYSTEM`. No memory-limit bailout can
+  then start anywhere; bound the process with the operating system instead (cgroup `MemoryMax`).
+  php-fpm pool directives for `memory_limit` are applied after the module starts and take precedence;
+  `phpinfo()` and `--ri` show the effective value when that happens.
+* Also: on 5.6 and 7.0, where a timeout can interrupt request startup, it is treated like memory
+  exhaustion; `--ri` reports every mechanism and its state; binaries rebuilt for 5.6 to 8.5 with the
+  same glibc floor, zero compiler warnings.
+
 ### What it does, silently
 
 Three things happen at process start. None of them is visible to an application: uploads, forms,
@@ -77,8 +118,10 @@ Three things happen at process start. None of them is visible to an application:
    inside the parser. A single part header is additionally capped at 64 KB. A request is only ever
    stopped when, without the module, it would have ended in `Allowed memory size exhausted`; the default
    `post_max_size=8M` against `memory_limit=128M` never comes near the line.
-4. **It steps aside on a patched PHP.** At startup the module reads `PHP_VERSION`; on 8.5.12, 8.4.27,
-   8.3.36, 8.2.35 or later it leaves PHP's own parser in place. One deployment covers patched and
+4. **It steps aside on a patched PHP.** At startup the module reads `PHP_VERSION` (8.5.12, 8.4.27,
+   8.3.36, 8.2.35 or later) and, since v3.1.0, looks for the symbols only a fixed engine exports, which
+   also recognises vendor backports that keep their version number. On such an engine it leaves PHP's
+   own parser in place and switches its v3.1 mechanisms off. One deployment covers patched and
    unpatched hosts, and nothing has to be undone after the upgrade.
 
 Since v3.0.2 the module also writes the master value of `session.upload_progress.enabled` to `0` and locks
@@ -86,19 +129,18 @@ the entry at `PHP_INI_SYSTEM`: `ini_get()` returns `"0"`, `phpinfo()` shows `Off
 `.htaccess` or `ini_set()` cannot turn it back on. That makes scanners and customers see what the detach
 already enforces.
 
-### What it cannot do
+### Why you still install the official packages
 
-It covers the multipart path, which is the application-independent one in both advisories, and
-nothing else. Both advisories are explicit that the patched release is the only complete mitigation.
-Outside any module's reach: application code that reaches a fatal error or out-of-memory (the producer
-of CVE-2026-109619 on php-fpm), ini diagnostics raised before request initialisation (mod_php
-`php_value` in `.htaccess`, `PHP_VALUE` passed by nginx or `mod_proxy_fcgi` to php-fpm) that consume
-stale error state, and PHP 8.5's `fatal_error_backtraces` (set it to 0). Until your packages are
-patched, keep the advisory's advice next to this module: a conservative `post_max_size`, no
-per-request ini overrides that emit a warning, no `RLIMIT_AS`/`RLIMIT_DATA`, and `pm.max_requests`
-low if you can afford it. On `memory_limit=-1` the headroom guard has nothing to guard and is inert;
-with the module loaded a finite `memory_limit` is fine on the multipart path, so you do not need the
-advisory's `memory_limit=-1` workaround for that path.
+The one thing the module does not do is replace the engine. The patched release changes the memory allocator and OPcache from the inside;
+a module can mirror what those changes achieve, and since v3.1.0 it does so for every path the
+advisories and the fix describe, but it remains a layer around the engine rather than the engine
+itself. We recommend the official packages, and the module says so itself when it finds them. Until
+they are installed, and on installs where they never will be, this is protection you can rely on
+rather than a stopgap; afterwards it costs nothing to leave in place.
+
+On `memory_limit=-1` the headroom guard has nothing to guard and is inert; with the module loaded a
+finite `memory_limit` is fine, so you do not need the advisories' `memory_limit=-1` workaround unless
+you want the belt-and-braces of `force_unlimited_memory`.
 
 Two implementation notes. The stop flag is one static per process, which is exact for NTS builds (all
 prebuilt files); a ZTS build from source could, in theory, see a spurious 413 on a concurrent thread.
@@ -112,7 +154,8 @@ whole), and it is the strategy the advisory's confirmed exploit used.
 extension=hp_uploadprogress_guard.so
 ```
 
-That is the whole configuration; the defaults are the three behaviours above. Prebuilt NTS x86_64
+That is the whole configuration; the defaults are everything described above, and
+`force_unlimited_memory` is the only opt-in. Prebuilt NTS x86_64
 binaries per PHP minor are in `dist/` with `SHA256SUMS`; `build.sh` rebuilds them from the official
 Docker images; `src/` has the one C file and the per-branch parser copies. Verify with
 `php --ri hp_uploadprogress_guard`: it reports whether the handler is detached, whether the carried
@@ -231,8 +274,10 @@ master.
 4. `MINFO` reports what happened, so `php --ri hp_uploadprogress_guard` (or `phpinfo()`) shows
    `rfc1867 (session.upload_progress) callback detached => yes` in the running build.
 
-That is the whole extension. No hooks into the engine, no opcode changes, no runtime cost: the
-pointer write happens once per process start.
+That was the whole extension in v1, and it is still the core: one pointer write at process start. v2
+added the carried parser, v3 the memory-headroom guard, v3.1 the out-of-memory exit, the request-state
+reset and the OPcache compile window described in the release notes above. There are still no opcode
+changes and no per-request cost worth measuring.
 
 ## Effect
 
@@ -241,7 +286,7 @@ pointer write happens once per process start.
 | File uploads, `$_FILES`, `$_POST`, multipart forms | work | work, unchanged |
 | Sessions, `session_start()`, save handlers | work | work, unchanged |
 | `session.upload_progress` feature (`$_SESSION["upload_progress_<name>"]` filled while a file is uploading) | works | **off**, nothing is written |
-| `ini_get('session.upload_progress.enabled')`, `phpinfo()` | `1` | still `1` (the ini is untouched; see Verify) |
+| `ini_get('session.upload_progress.enabled')`, `phpinfo()` | `1` | `0` / `Off`, locked (since v3.0.2) |
 | Process restart needed | | php-fpm / mod_php once; cgi and cli pick it up on the next start |
 
 The upload-progress feature is the only casualty. Browsers have reported upload progress natively
@@ -282,8 +327,10 @@ running build, and `grep hp_uploadprogress_guard /proc/<fpm-master-pid>/maps` sh
 the live master. An ini value only tells you what one file says, not what won after all layers were
 merged.
 
-What both approaches share: they only help if the bug is in that handler. On that point they are
-equal, and that is why the "stronger" claim is limited to the mechanism, not to the coverage.
+The ini setting stops at that handler. The module started there in v1 and, release by release, took on
+the rest of what the official fix does: the hardened parser, the memory headroom, the out-of-memory
+exit, the request-state reset and the OPcache compile window. That is the difference in coverage, on
+top of the difference in mechanism.
 
 ## Compatibility
 
@@ -365,8 +412,10 @@ php-fpm8.3 -m | grep hp_uploadprogress_guard
 grep -c hp_uploadprogress_guard /proc/$(systemctl show -p MainPID --value php8.3-fpm)/maps   # > 0
 ```
 
-Do **not** judge by `session.upload_progress.enabled` in `phpinfo()`: it stays `On`. The guard works
-underneath the ini, not through it.
+Since v3.0.2 `session.upload_progress.enabled` reads `Off` as well, but judge by `--ri`: it lists every
+mechanism (handler detached, parser replaced, headroom guard, out-of-memory exit, request-state reset,
+OPcache compile window, `memory_limit` lock) with `active`, `not needed (engine carries the fix)` or
+the effective value when a pool directive overrode it.
 
 End to end: put `test/probe.php` in a docroot and run `python3 test/fcgi-probe.py <fpm socket>
 <path to probe.php>`. Expected: `files=1 size=200000 err=0` and `session_keys=` (empty). Without the
@@ -435,6 +484,45 @@ run for idempotency, then a full untagged deploy on the Debian test host):
 
 Per host afterwards: every version's `php -m` lists the module, `--ri` says detached, fpm masters
 map the library, conf.d/php.d/php.conf.d carry the ini.
+
+**7. v3.1.0** (21 October 2026, evening; official `php:<X.Y>-cli` and `-fpm` images, Sury packages
+of the same day; outputs verbatim, exit codes from the shell).
+
+One multipart body of 15 000 fields, php-cgi, unpatched 8.4.11, 8.1.20, 7.0.33 and 5.6.40, identical
+on all four. `memory_limit` was set to 2M only so that a small body reaches the limit; every mechanism
+is relative to the limit in force (the headroom guard keeps an eighth of it free, the out-of-memory
+exit reacts to the engine's own error at any size), so the results are the same at 128M or 2G, the
+body just has to be proportionally larger:
+
+| | exit | meaning |
+|---|---|---|
+| no module | 255 | `Allowed memory size exhausted` during request startup |
+| `mode=native` | **137** | out-of-memory exit: the process ends instead of serving another request |
+| `mode=parse` (default) | 0, `Status: 413` | headroom guard, no out-of-memory at all |
+| `mode=native` + `force_unlimited_memory=1` | 0, `OK:15000` | no limit to hit |
+| script-phase OOM (`-r` loop) | 255, `Fatal error` | PHP behaviour unchanged |
+
+Genuine operating-system out-of-memory (`ulimit -v 90000`, `force_unlimited_memory=1`, 400 000-part
+body, 8.4): no module exit 255 with `Out of memory`, module exit 137.
+
+php-fpm, one static worker, GET, then the OOM POST with a file part, then GET (8.4.11, 7.4.33, 5.6.40):
+`mode=native` worker respawned (`child exited with code 137`), 0 orphaned upload temp files (stock PHP
+leaves 1 behind after its own startup failure, `code 70`); `mode=parse` answers `413`, same worker
+reused, 0 temp files. A 15 000-field POST to a script with `set_error_handler`, an undefined variable
+and `trigger_error`: `OK:15000 handled: … handled: custom` on 8.4 and 5.6, so handlers and warnings are
+untouched by the request-state reset.
+
+OPcache compile window (8.4.11, OPcache on, `memory_limit=20M`, a 5.5 MB script compiled for the first
+time with a 9 MB POST in memory): no module `Allowed memory size … in Unknown on line 0` (inside
+OPcache's store); module `compiled+ran, memory_limit=20M`, second request served normally.
+
+Fix detection: Sury 5.6.40-104, 7.0.33-92, 7.3.33-35, 7.4.33-31, 8.1.34-9 and 8.3.36-1 all report
+`carries the official fix => yes (fix symbol exported by the engine; parser replacement skipped)` and
+`out-of-memory exit => not needed`; docker 8.4.11, 8.1.20, 7.4.33, 5.6.40 report `no` with every
+mechanism `active`. Neither fix symbol exists on any unpatched engine (`nm -D`).
+
+All 12 binaries: zero compiler warnings, nothing above `GLIBC_2.14`, the fix probes appear as
+versionless weak references (`objdump -T`).
 
 ## Repository layout
 
