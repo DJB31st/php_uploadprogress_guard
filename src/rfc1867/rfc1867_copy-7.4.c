@@ -26,6 +26,10 @@
 #include <stdio.h>
 #include "php.h"
 #include "php_open_temporary_file.h"
+/* flag added in 7.4.14 / 8.0.1; older patch releases take the same value as a plain open_basedir check */
+#ifndef PHP_TMP_FILE_OPEN_BASEDIR_CHECK_ON_FALLBACK
+#define PHP_TMP_FILE_OPEN_BASEDIR_CHECK_ON_FALLBACK 1
+#endif
 #include "zend_globals.h"
 #include "php_globals.h"
 #include "php_variables.h"

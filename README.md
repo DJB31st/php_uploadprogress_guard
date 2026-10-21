@@ -86,6 +86,10 @@ before. In detail:
   exhaustion; `--ri` reports every mechanism and its state; binaries rebuilt for 5.6 to 8.5 with the
   same glibc floor, zero compiler warnings.
 
+Build fixes, same evening (source only, binaries unchanged): the 7.4 and 8.0 parser copies build on
+patch releases older than 7.4.14 / 8.0.1 again (#6), and `config.m4` picks the 5.6 parser copy for
+PHP 5.4 and 5.5 (#5).
+
 ### What it does, silently
 
 Three things happen at process start. None of them is visible to an application: uploads, forms,
@@ -336,7 +340,10 @@ top of the difference in mechanism.
 ## Compatibility
 
 * **PHP versions:** 5.6, 7.0, 7.1, 7.2, 7.3, 7.4, 8.0, 8.1, 8.2, 8.3, 8.4, 8.5 (one source file, no
-  per-version patches). 5.4/5.5 build the same way; no official Docker image exists to prebuild them.
+  per-version patches). 5.4 and 5.5 build from source with the 5.6 parser copy, which `config.m4`
+  picks automatically; no prebuilt file, because no official Docker image exists for them. Old patch
+  releases of a branch (7.4 before 7.4.14, 8.0.0) build too: the parser copies carry a compat define
+  for the temp-file flag those releases lack.
 * **ABI:** a PHP extension's ABI is the Zend module API number of the minor version plus the NTS/ZTS
   flavour (checked at load time). The prebuilt files are NTS x86_64 and load on any NTS build of that
   minor: Sury, Remi, cPanel EA4, DirectAdmin CustomBuild, the official Docker images. ZTS builds need
