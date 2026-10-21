@@ -1,6 +1,6 @@
 # hp_uploadprogress_guard
 
-**v2.1.0, 21 October 2026.** One PHP extension for CVE-2026-109618 / CVE-2026-109619
+**v2.2.0, 21 October 2026.** One PHP extension for CVE-2026-109618 / CVE-2026-109619
 ("php2shell"), built by [Hosted Power](https://www.hosted-power.com) for its own fleet and published
 for everyone. Loads into PHP 5.6 through 8.5 (Sury, Remi, cPanel EA4, DirectAdmin CustomBuild,
 official Docker images) without rebuilding PHP.
@@ -45,6 +45,13 @@ is enforced on the bytes actually read (removes the no-Content-Length bypass). A
 against unpatched headers; the delayed-OOM engine change itself cannot be carried (see below), so pair
 this with the official configuration mitigation for 109618: `memory_limit=-1` enforced administratively
 plus a cgroup or container memory cap, and a conservative `post_max_size`.
+
+**1c. On a PHP that already carries the official fix, `parse` steps aside by itself (v2.2.0).** At
+startup the module reads `PHP_VERSION`; on 8.5.12, 8.4.27, 8.3.36, 8.2.35 or later the SAPI handler is
+left to PHP's own (now fixed) parser and `php --ri hp_uploadprogress_guard` reports "running PHP already
+carries the official fix => yes (parser replacement skipped)". `block` still blocks, and the detach still
+applies. Vendor backports to older branches keep their version number, so there the carried parser stays
+in use, which is harmless. Verified against Sury's php8.4 8.4.27 package.
 
 **2. The global callback pointer is NULLed at process start.** With `detach_upload_progress = 1`
 (the default), the module NULLs the global `php_rfc1867_callback` at MINIT, after ext/session

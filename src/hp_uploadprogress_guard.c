@@ -24,9 +24,10 @@
 #include "ext/standard/info.h"
 #include "SAPI.h"
 #include "rfc1867.h"
+#include "ext/standard/php_versioning.h"
 #include <string.h>
 
-#define HP_MPG_VERSION "2.1.0"
+#define HP_MPG_VERSION "2.2.0"
 #define HP_MPG_NAME "hp_uploadprogress_guard"
 
 SAPI_API SAPI_POST_HANDLER_FUNC(hp_rfc1867_post_handler);
@@ -35,6 +36,45 @@ static SAPI_POST_HANDLER_FUNC(hp_upg_dispatch);
 static sapi_post_entry hp_upg_entry = { MULTIPART_CONTENT_TYPE, sizeof(MULTIPART_CONTENT_TYPE) - 1, NULL, hp_upg_dispatch };
 static int hp_upg_installed = 0;
 static int hp_upg_detached = 0;
+static int hp_upg_php_patched = 0;
+static char hp_upg_php_version[32] = "";
+
+/* First PHP release of each branch that contains the official fix. Older branches keep their version
+ * number when a vendor backports the fix, so they are never reported as patched here (mode=parse then
+ * keeps the carried fixed parser, which is harmless on a patched build). */
+static const struct { const char *branch; const char *fixed; } hp_upg_fixed[] = {
+	{ "8.5.", "8.5.12" }, { "8.4.", "8.4.27" }, { "8.3.", "8.3.36" }, { "8.2.", "8.2.35" }, { NULL, NULL }
+};
+
+static void hp_upg_detect_patched(void)
+{
+	zval *v;
+	size_t i;
+#if PHP_VERSION_ID < 70000
+	zval **vv;
+	if (zend_hash_find(EG(zend_constants), "PHP_VERSION", sizeof("PHP_VERSION"), (void **) &vv) == SUCCESS) {
+		zend_constant *c = (zend_constant *) *vv;
+		v = &c->value;
+	} else {
+		return;
+	}
+#else
+	v = zend_get_constant_str("PHP_VERSION", sizeof("PHP_VERSION") - 1);
+	if (!v) {
+		return;
+	}
+#endif
+	if (Z_TYPE_P(v) != IS_STRING) {
+		return;
+	}
+	strncpy(hp_upg_php_version, Z_STRVAL_P(v), sizeof(hp_upg_php_version) - 1);
+	for (i = 0; hp_upg_fixed[i].branch; i++) {
+		if (strncmp(hp_upg_php_version, hp_upg_fixed[i].branch, strlen(hp_upg_fixed[i].branch)) == 0) {
+			hp_upg_php_patched = php_version_compare(hp_upg_php_version, hp_upg_fixed[i].fixed) >= 0;
+			return;
+		}
+	}
+}
 
 PHP_INI_BEGIN()
 	PHP_INI_ENTRY("hp_uploadprogress_guard.mode", "parse", PHP_INI_SYSTEM, NULL)
@@ -102,9 +142,11 @@ static SAPI_POST_HANDLER_FUNC(hp_upg_dispatch)
 static PHP_MINIT_FUNCTION(hp_uploadprogress_guard)
 {
 	REGISTER_INI_ENTRIES();
+	hp_upg_detect_patched();
 	{
 		const char *mode = INI_STR("hp_uploadprogress_guard.mode");
-		if (!(mode && strcmp(mode, "native") == 0)) {
+		/* native: never replace. parse on a PHP that already carries the fix: step aside too. */
+		if (!((mode && strcmp(mode, "native") == 0) || (hp_upg_php_patched && !(mode && strcmp(mode, "block") == 0)))) {
 #if PHP_VERSION_ID < 70000
 			sapi_unregister_post_entry(&hp_upg_entry TSRMLS_CC);
 			if (sapi_register_post_entry(&hp_upg_entry TSRMLS_CC) == SUCCESS) {
@@ -136,6 +178,7 @@ static PHP_MINFO_FUNCTION(hp_uploadprogress_guard)
 	php_info_print_table_row(2, "version", HP_MPG_VERSION);
 	php_info_print_table_row(2, "multipart/form-data handler replaced", hp_upg_installed ? "yes" : "no");
 	php_info_print_table_row(2, "mode", INI_STR("hp_uploadprogress_guard.mode"));
+	php_info_print_table_row(2, "running PHP already carries the official fix", hp_upg_php_patched ? (hp_upg_installed ? "yes" : "yes (parser replacement skipped)") : "no");
 	php_info_print_table_row(2, "session.upload_progress handler detached", hp_upg_detached ? "yes" : "no");
 	php_info_print_table_end();
 	DISPLAY_INI_ENTRIES();
