@@ -2,7 +2,7 @@
 # build hp_uploadprogress_guard-<v>.so per PHP minor, using that branch's rfc1867.c copy (src-<v>/)
 set -u
 S="$(cd "$(dirname "$0")" && pwd)"
-A="/mnt/c/Users/Jo/OneDrive - hosted-power.com/Projects/awx-deploy/php/files/uploadprogress-guard/src/rfc1867"
+A="$S/src/rfc1867"
 for v in "$@"; do
   b="PHP-$v"; d="$S/src-$v"; mkdir -p "$d"; cp "$S/src/config.m4" "$S/src/hp_uploadprogress_guard.c" "$d/"
   cp "$A/rfc1867_copy-$v.c" "$d/rfc1867_copy.c"   # the per-branch parser copy is the source of truth (patched after the fix)

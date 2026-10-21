@@ -32,6 +32,14 @@
 #include "php_globals.h"
 #include "php_variables.h"
 #include "rfc1867.h"
+/* hp_uploadprogress_guard compat shim: fixed parser built against the headers of the unpatched PHP. */
+#ifndef ZEND_HAS_OOM
+#define ZEND_HAS_OOM() 0
+#endif
+#ifndef safe_ferealloc
+#define safe_ferealloc(ptr, nmemb, size, offset, fallible) safe_erealloc((ptr), (nmemb), (size), (offset))
+#endif
+
 #include "ext/standard/php_string.h"
 #include "ext/standard/php_smart_str.h"
 
@@ -57,7 +65,8 @@ static php_rfc1867_getword_t php_rfc1867_getword = php_ap_getword;
 static php_rfc1867_getword_conf_t php_rfc1867_getword_conf = php_ap_getword_conf;
 static php_rfc1867_basename_t php_rfc1867_basename = NULL;
 
-/* CVE-2026-109618/109619: redirect callback to dead file-local ptr */
+/* CVE-2026-109618/109619: the carried parser never invokes any multipart callback. php_rfc1867_callback
+ * is redirected to a file-local pointer that is always NULL, so the compiler drops all call sites. */
 #undef php_rfc1867_callback
 static int (*_hp_dead_cb)(unsigned int, void *, void ** TSRMLS_DC) = NULL;
 #define php_rfc1867_callback _hp_dead_cb
@@ -404,6 +413,14 @@ static int find_boundary(multipart_buffer *self, char *boundary TSRMLS_DC)
 }
 
 /* parse headers */
+static zend_bool php_mime_should_save_hdr(const char *name)
+{
+	return !strcasecmp(name, "Content-Disposition")
+		|| !strcasecmp(name, "Content-Type");
+}
+
+static char *php_mime_get_hdr_value(zend_llist header, char *key);
+
 static int multipart_buffer_headers(multipart_buffer *self, zend_llist *header TSRMLS_DC)
 {
 	char *line;
@@ -444,10 +461,16 @@ static int multipart_buffer_headers(multipart_buffer *self, zend_llist *header T
 			}
 
 			*value = '\0';
-			do { value++; } while(isspace(*value));
 
-			key = estrdup(line);
-			smart_str_appends(&buf_value, value);
+			/* Keep only headers we use, and ignore duplicates (CVE-2026-109618 hardening) */
+			if (!php_mime_should_save_hdr(line)
+					|| php_mime_get_hdr_value(*header, line)) {
+				key = NULL;
+			} else {
+				key = estrdup(line);
+				do { value++; } while(isspace((unsigned char)*value));
+				smart_str_appends(&buf_value, value);
+			}
 		} else if (buf_value.c) { /* If no ':' on the line, add to previous line */
 			smart_str_appends(&buf_value, line);
 		} else {

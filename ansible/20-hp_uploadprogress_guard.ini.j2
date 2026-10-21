@@ -4,8 +4,10 @@
 ; module, so a patched parser ships without rebuilding PHP). Source: php/files/uploadprogress-guard/src.
 ; Opt out with php_uploadprogress_guard_enabled: false (removes this file).
 extension=hp_uploadprogress_guard.so
-; parse = the module's copy of PHP's multipart parser; block = refuse every multipart/form-data request
-; before parsing (415, empty $_POST/$_FILES): emergency mode while no fix exists.
+; parse  = the module's copy of PHP's multipart parser, carrying the 8.x.y security hardening (header
+;          de-duplication, post_max_size enforcement) for PHP builds that are not patched yet
+; native = leave PHP's own parser in place (once the patched PHP packages are installed)
+; block  = refuse every multipart/form-data request before parsing (415, empty $_POST/$_FILES): emergency mode
 hp_uploadprogress_guard.mode = {{ php_uploadprogress_guard_mode }}
 ; client IPs that are always parsed, even in block mode (comma separated)
 hp_uploadprogress_guard.allow_ips = {{ php_uploadprogress_guard_allow_ips | join(',') }}

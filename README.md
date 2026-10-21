@@ -5,16 +5,23 @@
 for everyone. Loads into PHP 5.6 through 8.5 (Sury, Remi, cPanel EA4, DirectAdmin CustomBuild,
 official Docker images) without rebuilding PHP.
 
-**The official fix is now available: PHP 8.5.12, 8.4.27, 8.3.36, 8.2.35.** Install it the moment your
-vendor ships packages. This module is for hosts that cannot upgrade yet (EOL branches 5.6 through 8.1,
-panel vendor lag, custom builds) or as a defense-in-depth layer alongside the official fix.
+**Read the official advisories first:** [GHSA-w8hw-w9fx-j79w (CVE-2026-109618, RCE via OOM corruption)](https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w)
+and [GHSA-6wmf-4rv5-p3rp (CVE-2026-109619, RCE via stale global state)](https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp).
+**The official fix is available: PHP 8.5.12, 8.4.27, 8.3.36, 8.2.35**, plus minimal source backports
+for 7.4, 8.0 and 8.1. Install it the moment your vendor ships packages. This module is for hosts that
+cannot upgrade yet (EOL branches 5.6 through 8.1, panel vendor lag, custom builds) and as a layer next
+to the official fix. The advisories state that mod_php is the demonstrated case and that FPM is
+"susceptible by source analysis", and that `session.upload_progress.enabled=0` administratively is the
+official partial mitigation for the confirmed FPM path of 109619: that is what `detach_upload_progress`
+does, un-overridably.
 
 ### How it works
 
-The CVE attack surface is `php_session_rfc1867_callback` in ext/session — the session
-upload-progress handler that PHP's multipart parser (`main/rfc1867.c`) calls on every
-`multipart/form-data` request through a global function pointer. This module makes that handler
-unreachable at two levels:
+Per the official advisories, CVE-2026-109618 is memory corruption when an out-of-memory `longjmp`
+interrupts multipart parsing during request startup, and CVE-2026-109619 is request state surviving
+into the next request on the same worker, with the session upload-progress handler
+(`php_session_rfc1867_callback`, called by `main/rfc1867.c` through a global function pointer) as a
+confirmed consumer. This module acts on the multipart path at three levels:
 
 **1. The carried parser has the callback compiled out (v2.1.0).** In `mode = parse` (the default),
 the module replaces PHP's SAPI multipart handler with its own copy of `main/rfc1867.c` (one per PHP
@@ -27,6 +34,17 @@ tracking is lost (browsers report upload progress natively since 2012).
 In v2.0.0 the carried parser still referenced the global `php_rfc1867_callback` pointer (which we
 NULLed at startup). That meant the callback code was still present in the binary and gated by a
 runtime NULL check. v2.1.0 removes the code entirely.
+
+**1b. The carried parser is the fixed one.** The copies in `src/rfc1867/` come from the patched
+releases (8.5.12, 8.4.27, 8.3.36, 8.2.35), from the official `PHP-7.4/8.0/8.1-CVE-2026-109618-109619`
+backport branches, and for 7.0 to 7.3 and 5.6 from the same hunks applied by hand. They carry the
+multipart hardening of CVE-2026-109618: only `Content-Disposition` and `Content-Type` headers are kept
+and duplicates are ignored (removes the header memory-amplification OOM strategy), and `post_max_size`
+is enforced on the bytes actually read (removes the no-Content-Length bypass). A compat shim defines
+`ZEND_HAS_OOM()` as false and maps `safe_ferealloc` to `safe_erealloc`, so the fixed file builds
+against unpatched headers; the delayed-OOM engine change itself cannot be carried (see below), so pair
+this with the official configuration mitigation for 109618: `memory_limit=-1` enforced administratively
+plus a cgroup or container memory cap, and a conservative `post_max_size`.
 
 **2. The global callback pointer is NULLed at process start.** With `detach_upload_progress = 1`
 (the default), the module NULLs the global `php_rfc1867_callback` at MINIT, after ext/session
@@ -45,7 +63,7 @@ The official PHP fix is six layers deep. This module covers the first: making th
 upload-progress callback unreachable during multipart parsing. The other five are engine-level
 changes that a loadable module cannot deliver:
 
-- **OOM hardening** — `ZEND_HAS_OOM()` checks after every allocation in rfc1867.c and the session serializer
+- **Delayed OOM** — no more `longjmp` on memory-limit OOM; `ZEND_HAS_OOM()` checks after allocations (the rfc1867.c checks compile to the pre-fix behaviour in the carried copy)
 - **Fallible memory allocator** — `_femalloc` / `zend_hash_f*` family that returns NULL instead of aborting
 - **Serializer lockdown** — incomplete-class-only mode during session decode, blocks `__destruct` chains
 - **Early-RINIT state zeroing** — zeroes `BG(serialize_lock)` before `php_hash_environment` runs
