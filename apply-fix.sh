@@ -1,11 +1,11 @@
 #!/bin/bash
 # apply-fix.sh <php-src commit sha> [more shas...]
 # For each upstream fix commit: fetch the patch, keep only the main/rfc1867.c hunks, apply them to
-# every per-branch parser copy (src-<v>/rfc1867_copy.c, i.e. the files that go into the module),
+# every per-branch parser copy (src/rfc1867/rfc1867_copy-<v>.c, the files that go into the module),
 # report which branches applied cleanly and which need a manual backport, then rebuild + test.
 set -u
 S="$(cd "$(dirname "$0")" && pwd)"
-A="/mnt/c/Users/Jo/OneDrive - hosted-power.com/Projects/awx-deploy/php/files/uploadprogress-guard/src/rfc1867"
+A="$S/src/rfc1867"   # the per-branch parser copies that go into the module
 mkdir -p "$S/patches"
 for sha in "$@"; do
   curl -fsSL "https://github.com/php/php-src/commit/$sha.patch" -o "$S/patches/$sha.patch" || { echo "cannot fetch $sha"; exit 1; }
@@ -23,4 +23,4 @@ for sha in "$@"; do
   done
 done
 echo "== rebuild + test"
-echo "now run: $S/build.sh 8.5 8.4 8.3 8.2 8.1 8.0 7.4 7.3 7.2 7.1 7.0 5.6 && docker run --rm -v $S/out:/out:ro -v $S/test-all.sh:/t.sh:ro php:8.4-cli bash /t.sh"
+echo "now run: $S/build.sh 8.5 8.4 8.3 8.2 8.1 8.0 7.4 7.3 7.2 7.1 7.0 5.6"
