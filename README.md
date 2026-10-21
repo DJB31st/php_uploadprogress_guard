@@ -1,94 +1,66 @@
 # hp_uploadprogress_guard
 
-**v2.2.0, 21 October 2026.** One PHP extension for CVE-2026-109618 / CVE-2026-109619
-("php2shell"), built by [Hosted Power](https://www.hosted-power.com) for its own fleet and published
-for everyone. Loads into PHP 5.6 through 8.5 (Sury, Remi, cPanel EA4, DirectAdmin CustomBuild,
-official Docker images) without rebuilding PHP.
+**v2.2.0, 21 October 2026.** A small PHP extension that makes an unpatched PHP behave like the patched
+one on the multipart path of CVE-2026-109618 / CVE-2026-109619, without rebuilding PHP and without
+changing anything for the applications on the host. Built by [Hosted Power](https://www.hosted-power.com)
+for its own fleet, published for everyone. PHP 5.6 through 8.5; Sury, Remi, cPanel EA4, DirectAdmin
+CustomBuild, official Docker images.
 
-**Read the official advisories first:** [GHSA-w8hw-w9fx-j79w (CVE-2026-109618, RCE via OOM corruption)](https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w)
-and [GHSA-6wmf-4rv5-p3rp (CVE-2026-109619, RCE via stale global state)](https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp).
-**The official fix is available: PHP 8.5.12, 8.4.27, 8.3.36, 8.2.35**, plus minimal source backports
-for 7.4, 8.0 and 8.1. Install it the moment your vendor ships packages. This module is for hosts that
-cannot upgrade yet (EOL branches 5.6 through 8.1, panel vendor lag, custom builds) and as a layer next
-to the official fix. The advisories state that mod_php is the demonstrated case and that FPM is
-"susceptible by source analysis", and that `session.upload_progress.enabled=0` administratively is the
-official partial mitigation for the confirmed FPM path of 109619: that is what `detach_upload_progress`
-does, un-overridably.
+**The fix is the official PHP release** (8.5.12, 8.4.27, 8.3.36, 8.2.35, plus the PHP team's minimal
+backports for 7.4, 8.0 and 8.1). Install it as soon as your vendor ships packages. This module is for
+the hours or days until then, and for the versions nobody will patch. Read the advisories:
+[GHSA-w8hw-w9fx-j79w](https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w) and
+[GHSA-6wmf-4rv5-p3rp](https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp).
 
-### How it works
+### What it does, silently
 
-Per the official advisories, CVE-2026-109618 is memory corruption when an out-of-memory `longjmp`
-interrupts multipart parsing during request startup, and CVE-2026-109619 is request state surviving
-into the next request on the same worker, with the session upload-progress handler
-(`php_session_rfc1867_callback`, called by `main/rfc1867.c` through a global function pointer) as a
-confirmed consumer. This module acts on the multipart path at three levels:
+Three things happen at process start. None of them is visible to an application: uploads, forms,
+`$_POST` and `$_FILES` behave exactly as before. The only feature that disappears is
+`session.upload_progress`, which browsers replaced with native upload progress a long time ago.
 
-**1. The carried parser has the callback compiled out (v2.1.0).** In `mode = parse` (the default),
-the module replaces PHP's SAPI multipart handler with its own copy of `main/rfc1867.c` (one per PHP
-branch, in `src/rfc1867/`). In these copies, `php_rfc1867_callback` is `#define`-redirected to a
-file-local static pointer that is always NULL. The compiler eliminates all 7 callback call sites as
-dead code — the instructions are not in the binary, there is no pointer to corrupt, and no runtime
-check to bypass. **Multipart uploads, `$_POST` and `$_FILES` work normally.** Only `session.upload_progress`
-tracking is lost (browsers report upload progress natively since 2012).
+1. **The session upload-progress handler is taken out of the multipart parser.** The advisory for
+   CVE-2026-109619 names this handler as a confirmed way for stale request state to be consumed, and
+   gives `session.upload_progress.enabled=0` as the official partial mitigation. The module does the
+   same thing one level lower, by removing the handler from the parser's callback pointer, so no
+   `.user.ini`, `.htaccess` or `ini_set()` can switch it back on.
+2. **The multipart parser runs with the official hardening.** The module carries a copy of
+   `main/rfc1867.c` from the patched releases, one per PHP branch (8.2 to 8.5 from the release tags,
+   7.4/8.0/8.1 from the PHP team's backport branches, 7.0 to 7.3 and 5.6 with the same changes applied
+   by hand). It keeps only the two part headers PHP uses and ignores duplicates, which removes the
+   header memory-amplification path of CVE-2026-109618, and it enforces `post_max_size` on the bytes
+   actually read, which closes the no-Content-Length bypass. In this copy the callback of point 1 is
+   compiled out entirely.
+3. **It steps aside on a patched PHP.** At startup the module reads `PHP_VERSION`; on 8.5.12, 8.4.27,
+   8.3.36, 8.2.35 or later it leaves PHP's own parser in place. One deployment covers patched and
+   unpatched hosts, and nothing has to be undone after the upgrade.
 
-In v2.0.0 the carried parser still referenced the global `php_rfc1867_callback` pointer (which we
-NULLed at startup). That meant the callback code was still present in the binary and gated by a
-runtime NULL check. v2.1.0 removes the code entirely.
+### What it cannot do
 
-**1b. The carried parser is the fixed one.** The copies in `src/rfc1867/` come from the patched
-releases (8.5.12, 8.4.27, 8.3.36, 8.2.35), from the official `PHP-7.4/8.0/8.1-CVE-2026-109618-109619`
-backport branches, and for 7.0 to 7.3 and 5.6 from the same hunks applied by hand. They carry the
-multipart hardening of CVE-2026-109618: only `Content-Disposition` and `Content-Type` headers are kept
-and duplicates are ignored (removes the header memory-amplification OOM strategy), and `post_max_size`
-is enforced on the bytes actually read (removes the no-Content-Length bypass). A compat shim defines
-`ZEND_HAS_OOM()` as false and maps `safe_ferealloc` to `safe_erealloc`, so the fixed file builds
-against unpatched headers; the delayed-OOM engine change itself cannot be carried (see below), so pair
-this with the official configuration mitigation for 109618: `memory_limit=-1` enforced administratively
-plus a cgroup or container memory cap, and a conservative `post_max_size`.
+The core of CVE-2026-109618 is an engine change: PHP no longer `longjmp`s out of a memory-limit
+failure, it fails the request gracefully at the next safe point. A loadable module cannot change that.
+Until your packages are patched, follow the advisory's configuration advice next to this module:
+`memory_limit=-1` enforced from the pool or server configuration with a cgroup or container memory cap
+as the availability boundary, and a conservative `post_max_size`. Application-specific paths to a fatal
+error or out-of-memory are outside what any module can cover.
 
-**1c. On a PHP that already carries the official fix, `parse` steps aside by itself (v2.2.0).** At
-startup the module reads `PHP_VERSION`; on 8.5.12, 8.4.27, 8.3.36, 8.2.35 or later the SAPI handler is
-left to PHP's own (now fixed) parser and `php --ri hp_uploadprogress_guard` reports "running PHP already
-carries the official fix => yes (parser replacement skipped)". `block` still blocks, and the detach still
-applies. Vendor backports to older branches keep their version number, so there the carried parser stays
-in use, which is harmless. Verified against Sury's php8.4 8.4.27 package.
-
-**2. The global callback pointer is NULLed at process start.** With `detach_upload_progress = 1`
-(the default), the module NULLs the global `php_rfc1867_callback` at MINIT, after ext/session
-registered it. This is a safety net: if the handler replacement somehow fails and PHP's own parser
-runs instead of ours, the callback is still NULL.
-
-**Emergency block mode.** `mode = block` refuses every `multipart/form-data` request before PHP
-reads the body (HTTP 415). IPs in `allow_ips` bypass the block. This is certain against any bug in
-the multipart path but costs all file uploads and multipart forms.
-
-All settings are `PHP_INI_SYSTEM` only — no `.user.ini`, `.htaccess` or `ini_set()` can override them.
-
-### What this does NOT cover
-
-The official PHP fix is six layers deep. This module covers the first: making the session
-upload-progress callback unreachable during multipart parsing. The other five are engine-level
-changes that a loadable module cannot deliver:
-
-- **Delayed OOM** — no more `longjmp` on memory-limit OOM; `ZEND_HAS_OOM()` checks after allocations (the rfc1867.c checks compile to the pre-fix behaviour in the carried copy)
-- **Fallible memory allocator** — `_femalloc` / `zend_hash_f*` family that returns NULL instead of aborting
-- **Serializer lockdown** — incomplete-class-only mode during session decode, blocks `__destruct` chains
-- **Early-RINIT state zeroing** — zeroes `BG(serialize_lock)` before `php_hash_environment` runs
-- **Memory hard limit** — new `memory_hard_limit_percent` INI
-
-**Upgrade PHP when your vendor ships packages.** This module is for the gap.
+### Install
 
 ```ini
 extension=hp_uploadprogress_guard.so
-; defaults are safe: mode=parse, detach_upload_progress=1
-; uncomment for emergency block mode:
-; hp_uploadprogress_guard.mode = block
-; hp_uploadprogress_guard.allow_ips = 203.0.113.10,203.0.113.11
 ```
 
-Verify: `php --ri hp_uploadprogress_guard` (shows version, handler replaced, mode, detached).
-From outside: `curl -s -o /dev/null -w '%{http_code}' -F a=1 https://host/any.php` → `415` in block
-mode, `200` in parse mode; `-d a=1` → `200` in both.
+That is the whole configuration; the defaults are the three behaviours above. Prebuilt NTS x86_64
+binaries per PHP minor are in `dist/` with `SHA256SUMS`; `build.sh` rebuilds them from the official
+Docker images; `src/` has the one C file and the per-branch parser copies. Verify with
+`php --ri hp_uploadprogress_guard`: it reports whether the handler is detached, whether the carried
+parser is active, and whether the running PHP already carries the official fix.
+
+### Optional: emergency switch
+
+`hp_uploadprogress_guard.mode = block` refuses every `multipart/form-data` request before PHP reads
+the body (415, empty `$_POST`/`$_FILES`; `allow_ips` lists clients that are still parsed). It costs
+all uploads and multipart forms, so it is only for an environment under active attack that cannot
+patch yet. All settings are `PHP_INI_SYSTEM`.
 
 * `src/`: one C file plus `config.m4`, and `src/rfc1867/` with the per-branch parser copies.
 * `dist/`: prebuilt NTS x86_64 `.so` per PHP minor with `SHA256SUMS`.
