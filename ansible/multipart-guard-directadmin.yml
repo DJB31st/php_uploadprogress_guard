@@ -1,0 +1,92 @@
+---
+## hp_multipart_guard: PHP's multipart/form-data parser (main/rfc1867.c) carried as a loadable module, so a
+## patched parser can be installed on every php version (5.6-8.5, Sury/EA4/CustomBuild) the hour a fix is
+## public, without waiting for vendor packages. Same install shape as uploadprogress-guard. Source + build
+## script in files/multipart-guard/src. Default OFF (php_multipart_guard_enabled) until the module carries a fix.
+
+- name: Discover installed CustomBuild php versions -> /usr/local/phpXY/bin/php
+  ansible.builtin.find:
+    paths: /usr/local
+    patterns: 'php'
+    file_type: any
+    recurse: true
+    depth: 3
+  register: php_multipart_guard_da_binaries
+
+## Only versions with a shipped .so (files/multipart-guard/hp_multipart_guard-X.Y.so, 5.6-8.5).
+- name: set fact php_multipart_guard_versions
+  ansible.builtin.set_fact:
+    php_multipart_guard_versions: "{{ php_multipart_guard_da_binaries.files | map(attribute='path') | select('match', '^/usr/local/php[0-9]+/bin/php$') | map('regex_replace', '^/usr/local/php([0-9])([0-9]+)/bin/php$', '\\1.\\2') | intersect(php_multipart_guard_shipped_versions) | sort }}"
+  vars:
+    php_multipart_guard_shipped_versions: "{{ lookup('ansible.builtin.fileglob', 'multipart-guard/*.so') | regex_findall('-([0-9]+\\.[0-9]+)\\.so') }}"
+
+- name: Query extension_dir of php {{ php_multipart_guard_versions | join(', ') }}
+  ansible.builtin.command: "/usr/local/php{{ item | replace('.', '') }}/bin/php -n -r 'echo PHP_EXTENSION_DIR;'"
+  loop: "{{ php_multipart_guard_versions }}"
+  register: php_multipart_guard_extension_dirs
+  changed_when: false
+
+- block:
+    - name: Create directory -> /usr/local/hostedpower/php-modules (source for the CustomBuild php hook)
+      ansible.builtin.file:
+        path: /usr/local/hostedpower/php-modules
+        state: directory
+        mode: '0755'
+
+    - name: Stage hp_multipart_guard-X.Y.so + 20-hp_multipart_guard.ini -> /usr/local/hostedpower/php-modules/
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "/usr/local/hostedpower/php-modules/{{ item | basename }}"
+        mode: '0644'
+      loop: "{{ lookup('ansible.builtin.fileglob', 'multipart-guard/*.so', wantlist=True) }}"
+      loop_control:
+        label: "{{ item | basename }}"
+
+    - name: 20-hp_multipart_guard.ini -> /usr/local/hostedpower/php-modules/ (source for the hook)
+      ansible.builtin.template:
+        src: 20-hp_multipart_guard.ini.j2
+        dest: /usr/local/hostedpower/php-modules/20-hp_multipart_guard.ini
+        mode: '0644'
+
+    - name: hp_multipart_guard-{{ item.item }}.so -> {{ item.stdout }}/hp_multipart_guard.so
+      ansible.builtin.copy:
+        src: "multipart-guard/hp_multipart_guard-{{ item.item }}.so"
+        dest: "{{ item.stdout }}/hp_multipart_guard.so"
+        mode: '0644'
+      loop: "{{ php_multipart_guard_extension_dirs.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      notify: restart da php-fpm multipart guard versions
+
+    - name: 20-hp_multipart_guard.ini -> /usr/local/php{{ item | replace('.', '') }}/lib/php.conf.d/20-hp_multipart_guard.ini
+      ansible.builtin.template:
+        src: 20-hp_multipart_guard.ini.j2
+        dest: "/usr/local/php{{ item | replace('.', '') }}/lib/php.conf.d/20-hp_multipart_guard.ini"
+        mode: '0644'
+      loop: "{{ php_multipart_guard_versions }}"
+      notify: restart da php-fpm multipart guard versions
+
+  when: php_multipart_guard_enabled | bool
+
+- block:
+    - name: Remove 20-hp_multipart_guard.ini -> /usr/local/php{{ item | replace('.', '') }}/lib/php.conf.d/
+      ansible.builtin.file:
+        path: "/usr/local/php{{ item | replace('.', '') }}/lib/php.conf.d/20-hp_multipart_guard.ini"
+        state: absent
+      loop: "{{ php_multipart_guard_versions }}"
+      notify: restart da php-fpm multipart guard versions
+
+    - name: Remove hp_multipart_guard.so -> {{ item.stdout }}/hp_multipart_guard.so
+      ansible.builtin.file:
+        path: "{{ item.stdout }}/hp_multipart_guard.so"
+        state: absent
+      loop: "{{ php_multipart_guard_extension_dirs.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Remove directory -> /usr/local/hostedpower/php-modules
+      ansible.builtin.file:
+        path: /usr/local/hostedpower/php-modules
+        state: absent
+
+  when: not php_multipart_guard_enabled | bool
