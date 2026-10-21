@@ -108,7 +108,7 @@ extern void hp_upg_sym_safe_error_ex(void) __asm__("zend_mm_safe_error_ex") __at
 ZEND_TSRMLS_CACHE_DEFINE()
 #endif
 
-SAPI_API SAPI_POST_HANDLER_FUNC(hp_rfc1867_post_handler);
+SAPI_POST_HANDLER_FUNC(hp_rfc1867_post_handler);
 static SAPI_POST_HANDLER_FUNC(hp_upg_dispatch);
 
 static sapi_post_entry hp_upg_entry = { MULTIPART_CONTENT_TYPE, sizeof(MULTIPART_CONTENT_TYPE) - 1, NULL, hp_upg_dispatch };

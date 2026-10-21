@@ -250,7 +250,7 @@ static void free_filename(zval *el) {
 	zend_string_release_ex(filename, 0);
 }
 
-PHPAPI void hp_destroy_uploaded_files_hash(void) /* {{{ */
+void hp_destroy_uploaded_files_hash(void) /* {{{ */
 {
 	zend_hash_apply(SG(rfc1867_uploaded_files), unlink_filename);
 	zend_hash_destroy(SG(rfc1867_uploaded_files));
@@ -769,7 +769,7 @@ static char *multipart_buffer_read_body(multipart_buffer *self, size_t *len)
  *
  */
 
-SAPI_API SAPI_POST_HANDLER_FUNC(hp_rfc1867_post_handler) /* {{{ */
+SAPI_POST_HANDLER_FUNC(hp_rfc1867_post_handler) /* {{{ */
 {
 	char *boundary, *s = NULL, *boundary_end = NULL, *start_arr = NULL, *array_index = NULL;
 	char *lbuf = NULL, *abuf = NULL;
@@ -1433,7 +1433,7 @@ fileupload_done:
 }
 /* }}} */
 
-SAPI_API void hp_rfc1867_set_multibyte_callbacks(
+void hp_rfc1867_set_multibyte_callbacks(
 					php_rfc1867_encoding_translation_t encoding_translation,
 					php_rfc1867_get_detect_order_t get_detect_order,
 					php_rfc1867_set_input_encoding_t set_input_encoding,
