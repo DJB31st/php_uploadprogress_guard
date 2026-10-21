@@ -8,11 +8,12 @@ published for everyone. PHP 5.6 through 8.5; Sury, Remi, cPanel EA4, DirectAdmin
 Docker images. On a PHP that already carries the fix, vendor backports included, it notices and steps
 aside.
 
-**The fix is the official PHP release** (8.5.12, 8.4.27, 8.3.36, 8.2.35, plus the PHP team's minimal
-backports for 7.4, 8.0 and 8.1, which Sury applied to 5.6 through 7.3 as well), and we recommend it
-without reservation. This module is realistic protection in its own right: for the time until your
-vendor ships packages, for the installs that cannot be upgraded, and as a second layer that stays
-useful after the upgrade because it steps aside by itself. Read the advisories:
+**Install the official PHP release** (8.5.12, 8.4.27, 8.3.36, 8.2.35, and the PHP team's backports
+for 7.4, 8.0 and 8.1, which Sury extended down to 5.6); we recommend it without reservation. **This
+module protects an unpatched PHP for real.** It mirrors the official fix component by component,
+tested per branch and per SAPI (see the tests below), so a host that runs it is protected today,
+whether its packages arrive tomorrow or never. After the upgrade it steps aside on its own, so there
+is nothing to undo. Read the advisories:
 [GHSA-w8hw-w9fx-j79w](https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w) and
 [GHSA-6wmf-4rv5-p3rp](https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp).
 
