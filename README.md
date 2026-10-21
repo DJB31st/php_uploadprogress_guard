@@ -90,8 +90,11 @@ extension=hp_uploadprogress_guard.so
 ```
 
 That is the whole configuration; the defaults are the three behaviours above. Prebuilt NTS x86_64
-binaries per PHP minor are in `dist/` with `SHA256SUMS`; `build.sh` rebuilds them from the official
-Docker images; `src/` has the one C file and the per-branch parser copies. Verify with
+binaries per PHP minor are in `dist/` with `SHA256SUMS`, built on Debian 12 against Sury's `phpX.Y-dev`
+so they bind no glibc symbol newer than 2.14 and load on Debian 11/12/13, Ubuntu 22.04+ and EL
+(v2.2.0 binaries published before 15:00 UTC on 21 October were built on Debian 13 and refused to
+load on Debian 11/12 and Ubuntu 22.04 with "GLIBC_2.38 not found"; re-download if you have those).
+`build.sh` rebuilds them and refuses any result above that floor; `src/` has the one C file and the per-branch parser copies. Verify with
 `php --ri hp_uploadprogress_guard`: it reports whether the handler is detached, whether the carried
 parser is active, and whether the running PHP already carries the official fix.
 
