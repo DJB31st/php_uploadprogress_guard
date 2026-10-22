@@ -5,8 +5,9 @@ CVE-2026-109618 / CVE-2026-109619 component by component, so that on an unpatche
 the published attack chain is removed, without rebuilding PHP and without changing anything for the
 applications on the host. Built by [Hosted Power](https://www.hosted-power.com) for its own fleet,
 published for everyone. PHP 5.6 through 8.5; Sury, Remi, cPanel EA4, DirectAdmin CustomBuild, official
-Docker images. On a PHP that already carries the fix, vendor backports included, it notices and steps
-aside.
+Docker images. **Prebuilt for Linux x86_64 and arm64 (aarch64) and for Windows x64** (7.2 to 8.5, nts and
+ts), with checksums; one C source file for everything else. On a PHP that already carries the fix, vendor
+backports included, it notices and steps aside.
 
 **Install the official PHP release** (8.5.12, 8.4.27, 8.3.36, 8.2.35, and the PHP team's backports
 for 7.4, 8.0 and 8.1, which Sury extended down to 5.6); we recommend it without reservation. **This
@@ -89,6 +90,11 @@ before. In detail:
 Build fixes, same evening (source only, binaries unchanged): the 7.4 and 8.0 parser copies build on
 patch releases older than 7.4.14 / 8.0.1 again (#6), and `config.m4` picks the 5.6 parser copy for
 PHP 5.4 and 5.5 (#5).
+
+**22 October: arm64 and Windows.** Prebuilt `.so` files for aarch64 (all branches 5.6 to 8.5, same old-glibc
+images as x86_64) and Windows x64 DLLs for 7.2 to 8.5, nts and ts, built by the `Windows build` workflow with
+the PHP team's php-windows-builder and loaded into a stock Windows PHP in the same run. The source needed
+only portability changes (no behaviour change); x86_64 files are unchanged. See [Install](#install).
 
 ### What it does, silently
 
