@@ -4,9 +4,9 @@
 CVE-2026-109618 / CVE-2026-109619 component by component, so that on an unpatched PHP every link of
 the published attack chain is removed, without rebuilding PHP and without changing anything for the
 applications on the host. Built by [Hosted Power](https://www.hosted-power.com) for its own fleet,
-published for everyone. PHP 5.6 through 8.5; Sury, Remi, cPanel EA4, DirectAdmin CustomBuild, official
-Docker images. **Prebuilt for Linux x86_64 and arm64 (aarch64) and for Windows x64** (7.2 to 8.5, nts and
-ts), with checksums; one C source file for everything else. On a PHP that already carries the fix, vendor
+published for everyone. PHP 5.4 through 8.5; Sury, Remi, cPanel EA4, DirectAdmin CustomBuild, official
+Docker images. **Prebuilt for Linux x86_64 and arm64 (aarch64), every branch from 5.4 to 8.5, and for
+Windows x64** (7.2 to 8.5, nts and ts), with checksums; one C source file for everything else. On a PHP that already carries the fix, vendor
 backports included, it notices and steps aside.
 
 **Install the official PHP release** (8.5.12, 8.4.27, 8.3.36, 8.2.35, and the PHP team's backports
@@ -345,19 +345,23 @@ top of the difference in mechanism.
 
 ## Compatibility
 
-* **PHP versions:** 5.6, 7.0, 7.1, 7.2, 7.3, 7.4, 8.0, 8.1, 8.2, 8.3, 8.4, 8.5 (one source file, no
-  per-version patches). 5.4 and 5.5 build from source with the 5.6 parser copy, which `config.m4`
-  picks automatically; no prebuilt file, because no official Docker image exists for them. Old patch
-  releases of a branch (7.4 before 7.4.14, 8.0.0) build too: the parser copies carry a compat define
-  for the temp-file flag those releases lack.
+* **PHP versions:** 5.4, 5.5, 5.6, 7.0, 7.1, 7.2, 7.3, 7.4, 8.0, 8.1, 8.2, 8.3, 8.4, 8.5 (one source
+  file, no per-version patches). 5.4 and 5.5 use the 5.6 parser copy, which `config.m4` and `config.w32`
+  pick automatically; their prebuilt files are made by `build-legacy.sh`, which compiles PHP 5.4.45 /
+  5.5.38 from the php.net source archives (no official Docker image exists) and builds the module against
+  them, with the same tests and the same glibc gate as the others. Old patch releases of a branch (7.4
+  before 7.4.14, 8.0.0) build too: the parser copies carry a compat define for the temp-file flag those
+  releases lack.
 * **ABI:** a PHP extension's ABI is the Zend module API number of the minor version plus the NTS/ZTS
   flavour (checked at load time). The prebuilt files are NTS x86_64 and load on any NTS build of that
   minor: Sury, Remi, cPanel EA4, DirectAdmin CustomBuild, the official Docker images. ZTS builds need
   a rebuild from source.
 * **CPU architecture:** prebuilt files for x86_64 and aarch64 (arm64), both built on the same old-glibc
   images (`build.sh`, `ARCHS="x86_64 aarch64"`, aarch64 under QEMU). Highest glibc symbol version required:
-  `GLIBC_2.14` on x86_64, `GLIBC_2.17` on aarch64 (that architecture's baseline, EL7 aarch64 and newer).
-  The code has nothing architecture-specific. Windows x64 DLLs come from the CI workflow (`dist/windows/`).
+  `GLIBC_2.3` on x86_64 (`memcpy` is bound to its original symbol version in `src/hp_glibc_compat.h`, so
+  CentOS 6, Debian 6 and anything newer load the files; verified against the stock PHP 5.4.16 of CentOS 7),
+  `GLIBC_2.17` on aarch64 (that architecture's baseline, EL7 aarch64 and newer). The code has nothing
+  architecture-specific. Windows x64 DLLs come from the CI workflow (`dist/windows/`).
 * **libc:** since v2 the binaries carry the multipart parser and therefore do import versioned glibc
   symbols. They are built on the oldest Debian image that ships each minor (stretch for 5.6 to 7.3,
   buster for 7.4 to 8.1, bullseye for 8.2 to 8.4, bookworm for 8.5) and `build.sh` refuses any file

@@ -59,6 +59,7 @@
 #include "config.h"
 #endif
 #include "php.h"
+#include "hp_glibc_compat.h"
 #include "php_ini.h"
 #include "zend_ini.h"
 #include "ext/standard/info.h"

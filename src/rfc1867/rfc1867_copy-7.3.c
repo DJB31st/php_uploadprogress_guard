@@ -25,6 +25,7 @@
 
 #include <stdio.h>
 #include "php.h"
+#include "hp_glibc_compat.h"
 #include "php_open_temporary_file.h"
 #include "zend_globals.h"
 #include "php_globals.h"

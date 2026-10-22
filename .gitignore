@@ -2,6 +2,7 @@ autom4te.cache/
 build/
 config.h*
 configure*
+/hp_glibc_compat.h
 /hp_uploadprogress_guard.c
 *.la
 .libs/
