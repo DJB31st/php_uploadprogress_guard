@@ -62,12 +62,17 @@ else
     fi
 fi
 
-# prebuilts exist for 5.6 .. 8.5 (5.4/5.5 need a source build)
+# prebuilts exist for 5.4 .. 8.5 (5.4/5.5 added by upstream 2026-10-21,
+# glibc floor 2.3 x86_64 — fine on trusty and later; 5.4/5.5 also have
+# aarch64 builds). Source build (build_guard_55.sh) remains a fallback.
 case "$V" in
-    5.6|7.0|7.1|7.2|7.3|7.4|8.0|8.1|8.2|8.3|8.4|8.5) ;;
-    5.4|5.5) echo "[FAIL] no prebuilt for $V — build from source instead"; exit 1;;
-    *) echo "[FAIL] unsupported version '$V' (expected e.g. 7.2, 7.4, 8.1)"; exit 1;;
+    5.4|5.5|5.6|7.0|7.1|7.2|7.3|7.4|8.0|8.1|8.2|8.3|8.4|8.5) ;;
+    *) echo "[FAIL] unsupported version '$V' (expected 5.4 .. 8.5, e.g. 7.2, 7.4)"; exit 1;;
 esac
+if [ "$(uname -m 2>/dev/null || echo unknown)" != "x86_64" ]; then
+    echo "[WARN] $(uname -m) is not x86_64 — prebuilts are x86_64 (5.4/5.5 also"
+    echo "       ship aarch64; other minors need a source build here)"
+fi
 WORKDIR="/tmp/phpguard-install.$$"
 
 #----------------------------------------------------------- sanity checks ----
