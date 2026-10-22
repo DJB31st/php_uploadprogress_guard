@@ -348,9 +348,10 @@ top of the difference in mechanism.
   flavour (checked at load time). The prebuilt files are NTS x86_64 and load on any NTS build of that
   minor: Sury, Remi, cPanel EA4, DirectAdmin CustomBuild, the official Docker images. ZTS builds need
   a rebuild from source.
-* **CPU architecture:** the prebuilt files are x86_64. On arm64 (aarch64) build from source: the code
-  has nothing architecture-specific, and the build and the full behaviour (headroom 413, out-of-memory
-  exit, normal parsing) were verified on aarch64 for 8.4, 7.4 and 5.6 (official images under QEMU).
+* **CPU architecture:** prebuilt files for x86_64 and aarch64 (arm64), both built on the same old-glibc
+  images (`build.sh`, `ARCHS="x86_64 aarch64"`, aarch64 under QEMU). Highest glibc symbol version required:
+  `GLIBC_2.14` on x86_64, `GLIBC_2.17` on aarch64 (that architecture's baseline, EL7 aarch64 and newer).
+  The code has nothing architecture-specific. Windows x64 DLLs come from the CI workflow (`dist/windows/`).
 * **libc:** since v2 the binaries carry the multipart parser and therefore do import versioned glibc
   symbols. They are built on the oldest Debian image that ships each minor (stretch for 5.6 to 7.3,
   buster for 7.4 to 8.1, bullseye for 8.2 to 8.4, bookworm for 8.5) and `build.sh` refuses any file
@@ -367,19 +368,38 @@ cd src && phpize && ./configure && make
 # -> modules/hp_uploadprogress_guard.so ; `make install` drops it in extension_dir
 ```
 
+### Prebuilt (Linux)
+
+`dist/` holds one NTS build per PHP minor and CPU architecture, with `SHA256SUMS`:
+
+* x86_64: `dist/hp_uploadprogress_guard-<X.Y>.so`
+* arm64 (aarch64, e.g. Graviton, Ampere, Raspberry Pi OS 64-bit): `dist/hp_uploadprogress_guard-<X.Y>-aarch64.so`
+
+Pick the file for your minor version and `uname -m`, copy it to `php -n -r 'echo PHP_EXTENSION_DIR;'` as
+`hp_uploadprogress_guard.so`, and add an ini with `extension=hp_uploadprogress_guard.so` to the scan dir of every
+SAPI (the snippets below do exactly that; on arm64 add `-aarch64` to the file name). The Ansible task files pick
+the architecture from `ansible_facts['architecture']`.
+
 ### Windows
 
-No prebuilt DLL. The source builds with the PHP SDK (`phpize && configure --enable-hp-uploadprogress-guard && nmake`
-from the repository root, `config.w32` picks the parser copy) and with the PHP team's
-[php-windows-builder](https://github.com/php/php-windows-builder); the `Windows build` workflow in this repository
-builds nts and ts x64 DLLs for 8.4, 8.1 and 7.4 on every push and loads the nts ones into a stock Windows PHP
-(`--ri` output in the job log). Thread-safe builds carry the per-thread globals cache; PHP 5.6 ZTS is not supported.
+`dist/windows/` holds a DLL per PHP minor (7.2 to 8.5), thread safety and compiler, with `SHA256SUMS`:
+`php_hp_uploadprogress_guard-<X.Y>-<nts|ts>-<vc15|vs16|vs17>-x64.dll`. They are built by the `Windows build`
+workflow in this repository with the PHP team's [php-windows-builder](https://github.com/php/php-windows-builder),
+and the nts ones are loaded into a stock Windows PHP in the same run (`--ri` output in the job log).
 
-### Prebuilt
+```powershell
+php -i | findstr /C:"PHP Version" /C:"Thread Safety" /C:"Compiler" /C:"extension_dir"
+# e.g. 8.3.x, Thread Safety => disabled (nts) or enabled (ts), Compiler => Visual C++ 2019 (vs16)
+copy dist\windows\php_hp_uploadprogress_guard-8.3-nts-vs16-x64.dll "C:\php\ext\php_hp_uploadprogress_guard.dll"
+# then in php.ini:  extension=hp_uploadprogress_guard   and restart IIS / Apache
+php --ri hp_uploadprogress_guard
+```
 
-Pick `dist/hp_uploadprogress_guard-<X.Y>.so` for your minor version, verify it against
-`dist/SHA256SUMS`, copy it to `php -n -r 'echo PHP_EXTENSION_DIR;'` as `hp_uploadprogress_guard.so`,
-and add an ini with `extension=hp_uploadprogress_guard.so` to the scan dir of every SAPI.
+The compiler tag must match your PHP build (`php -i` prints it): vc15 for 7.2 to 7.4, vs16 for 8.0 to 8.3, vs17
+for 8.4 and 8.5, which are also the builds windows.php.net ships. Thread safety must match too (IIS FastCGI uses
+nts, Apache mod_php uses ts). x86 (32-bit), PHP 7.0/7.1 and 5.6 on Windows are not provided; those build from
+source with the PHP SDK: `phpize && configure --enable-hp-uploadprogress-guard && nmake` from the repository root
+(`config.w32` picks the parser copy). PHP 5.6 ZTS is not supported.
 
 ### Debian / Ubuntu with Sury packages
 
@@ -546,9 +566,11 @@ versionless weak references (`objdump -T`).
 ## Repository layout
 
 ```
-src/        hp_uploadprogress_guard.c, config.m4
-dist/       prebuilt NTS x86_64 .so per PHP minor + SHA256SUMS
-build.sh    rebuild dist/ from the official php:<X.Y>-cli images
+src/        hp_uploadprogress_guard.c, config.m4, rfc1867/ (per-branch parser copies)
+config.w32  Windows build file (PHP SDK / php-windows-builder)
+dist/       prebuilt NTS .so per PHP minor for x86_64 and aarch64 + SHA256SUMS
+dist/windows/  DLL per PHP minor (7.2-8.5), nts/ts, x64 + SHA256SUMS, from the CI workflow
+build.sh    rebuild dist/ from the oldest official php:<X.Y>-cli images, both architectures
 test/       probe.php, run-builtin-server.sh (Docker functional test), fcgi-probe.py (php-fpm direct)
 ansible/    the task files and ini files we deploy (Debian/Sury, cPanel EA4, DirectAdmin)
 ```

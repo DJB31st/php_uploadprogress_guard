@@ -19,12 +19,22 @@
   loop: "{{ php_uploadprogress_guard_ea_roots.files | map(attribute='path') | map('basename') | map('regex_replace', '^ea-php([0-9])([0-9]+)$', '\\1.\\2') | sort }}"
   register: php_uploadprogress_guard_ea_binaries
 
-## Only versions with a shipped .so (files/uploadprogress-guard/hp_uploadprogress_guard-X.Y.so, 5.6-8.5).
+## The DSO handler (mod_php) loads extensions in the Apache parent: it needs restartsrv_httpd, not the fpm restart.
+- name: Check for the dso PHP handler -> /etc/cpanel/ea4/php.conf
+  ansible.builtin.command: grep -q dso /etc/cpanel/ea4/php.conf
+  register: php_uploadprogress_guard_dso
+  changed_when: false
+  failed_when: false
+
+## Only versions with a shipped .so for this CPU architecture: files/uploadprogress-guard/hp_uploadprogress_guard-X.Y.so
+## (x86_64) or hp_uploadprogress_guard-X.Y-aarch64.so (arm64), 5.6-8.5.
 - name: set fact php_uploadprogress_guard_versions
   ansible.builtin.set_fact:
+    php_uploadprogress_guard_arch_suffix: "{{ php_uploadprogress_guard_arch_suffix }}"
     php_uploadprogress_guard_versions: "{{ php_uploadprogress_guard_ea_binaries.results | selectattr('stat.exists') | map(attribute='item') | intersect(php_uploadprogress_guard_shipped_versions) | sort }}"
   vars:
-    php_uploadprogress_guard_shipped_versions: "{{ lookup('ansible.builtin.fileglob', 'uploadprogress-guard/*.so') | regex_findall('-([0-9]+\\.[0-9]+)\\.so') }}"
+    php_uploadprogress_guard_arch_suffix: "{{ '-aarch64' if ansible_facts['architecture'] == 'aarch64' else '' }}"
+    php_uploadprogress_guard_shipped_versions: "{{ lookup('ansible.builtin.fileglob', 'uploadprogress-guard/*.so') | regex_findall('-([0-9]+\\.[0-9]+)' ~ php_uploadprogress_guard_arch_suffix ~ '\\.so') }}"
 
 - block:
     - name: Create directory -> /usr/local/hostedpower/php-modules (source for the ea-php hook)
@@ -33,12 +43,12 @@
         state: directory
         mode: '0755'
 
-    - name: Stage hp_uploadprogress_guard-X.Y.so + 20-hp_uploadprogress_guard.ini -> /usr/local/hostedpower/php-modules/
+    - name: Stage hp_uploadprogress_guard-X.Y{{ php_uploadprogress_guard_arch_suffix }}.so (as hp_uploadprogress_guard-X.Y.so) + 20-hp_uploadprogress_guard.ini -> /usr/local/hostedpower/php-modules/
       ansible.builtin.copy:
         src: "{{ item }}"
-        dest: "/usr/local/hostedpower/php-modules/{{ item | basename }}"
+        dest: "/usr/local/hostedpower/php-modules/{{ item | basename | regex_replace('-aarch64\\.so$', '.so') }}"
         mode: '0644'
-      loop: "{{ lookup('ansible.builtin.fileglob', 'uploadprogress-guard/*.so', wantlist=True) }}"
+      loop: "{{ lookup('ansible.builtin.fileglob', 'uploadprogress-guard/*.so', wantlist=True) | select('search', '-[0-9]+\\.[0-9]+' ~ php_uploadprogress_guard_arch_suffix ~ '\\.so$') | list }}"
       loop_control:
         label: "{{ item | basename }}"
 
@@ -48,13 +58,15 @@
         dest: /usr/local/hostedpower/php-modules/20-hp_uploadprogress_guard.ini
         mode: '0644'
 
-    - name: hp_uploadprogress_guard-{{ item }}.so -> /opt/cpanel/ea-php{{ item | replace('.', '') }}/root/usr/lib64/php/modules/hp_uploadprogress_guard.so
+    - name: hp_uploadprogress_guard-{{ item }}{{ php_uploadprogress_guard_arch_suffix }}.so -> /opt/cpanel/ea-php{{ item | replace('.', '') }}/root/usr/lib64/php/modules/hp_uploadprogress_guard.so
       ansible.builtin.copy:
-        src: "uploadprogress-guard/hp_uploadprogress_guard-{{ item }}.so"
+        src: "uploadprogress-guard/hp_uploadprogress_guard-{{ item }}{{ php_uploadprogress_guard_arch_suffix }}.so"
         dest: "/opt/cpanel/ea-php{{ item | replace('.', '') }}/root/usr/lib64/php/modules/hp_uploadprogress_guard.so"
         mode: '0644'
       loop: "{{ php_uploadprogress_guard_versions }}"
-      notify: restart ea-php-fpm uploadprogress guard
+      notify:
+        - restart ea-php-fpm uploadprogress guard
+        - restart httpd dso uploadprogress guard
 
     - name: 20-hp_uploadprogress_guard.ini -> /opt/cpanel/ea-php{{ item | replace('.', '') }}/root/etc/php.d/20-hp_uploadprogress_guard.ini
       ansible.builtin.template:
@@ -62,7 +74,9 @@
         dest: "/opt/cpanel/ea-php{{ item | replace('.', '') }}/root/etc/php.d/20-hp_uploadprogress_guard.ini"
         mode: '0644'
       loop: "{{ php_uploadprogress_guard_versions }}"
-      notify: restart ea-php-fpm uploadprogress guard
+      notify:
+        - restart ea-php-fpm uploadprogress guard
+        - restart httpd dso uploadprogress guard
 
   when: php_uploadprogress_guard_enabled | bool
 
@@ -72,7 +86,9 @@
         path: "/opt/cpanel/ea-php{{ item.0 | replace('.', '') }}/root/{{ item.1 }}"
         state: absent
       loop: "{{ php_uploadprogress_guard_versions | product(['etc/php.d/20-hp_uploadprogress_guard.ini', 'usr/lib64/php/modules/hp_uploadprogress_guard.so']) | list }}"
-      notify: restart ea-php-fpm uploadprogress guard
+      notify:
+        - restart ea-php-fpm uploadprogress guard
+        - restart httpd dso uploadprogress guard
 
     - name: Remove directory -> /usr/local/hostedpower/php-modules
       ansible.builtin.file:

@@ -16,12 +16,23 @@
     use_regex: false
   register: php_uploadprogress_guard_fpm_binaries
 
-## Only versions with a shipped .so (files/uploadprogress-guard/hp_uploadprogress_guard-X.Y.so = every minor Sury publishes, 5.6-8.5).
+## Only versions with a shipped .so for this CPU architecture: files/uploadprogress-guard/hp_uploadprogress_guard-X.Y.so
+## (x86_64) or hp_uploadprogress_guard-X.Y-aarch64.so (arm64), every minor Sury publishes, 5.6-8.5.
 - name: set fact php_uploadprogress_guard_versions
   ansible.builtin.set_fact:
+    php_uploadprogress_guard_arch_suffix: "{{ php_uploadprogress_guard_arch_suffix }}"
     php_uploadprogress_guard_versions: "{{ php_uploadprogress_guard_fpm_binaries.files | map(attribute='path') | map('basename') | map('regex_replace', '^php-fpm', '') | intersect(php_uploadprogress_guard_shipped_versions) | sort }}"
   vars:
-    php_uploadprogress_guard_shipped_versions: "{{ lookup('ansible.builtin.fileglob', 'uploadprogress-guard/*.so') | regex_findall('-([0-9]+\\.[0-9]+)\\.so') }}"
+    php_uploadprogress_guard_arch_suffix: "{{ '-aarch64' if ansible_facts['architecture'] == 'aarch64' else '' }}"
+    php_uploadprogress_guard_shipped_versions: "{{ lookup('ansible.builtin.fileglob', 'uploadprogress-guard/*.so') | regex_findall('-([0-9]+\\.[0-9]+)' ~ php_uploadprogress_guard_arch_suffix ~ '\\.so') }}"
+
+## mod_php needs an Apache restart to pick the module up (fpm restarts do not reach it).
+- name: Check for mod_php -> /etc/apache2/mods-enabled/phpX.Y.load
+  ansible.builtin.find:
+    paths: /etc/apache2/mods-enabled
+    patterns: 'php*.load'
+  register: php_uploadprogress_guard_modphp
+  failed_when: false
 
 - name: Query extension_dir of php {{ php_uploadprogress_guard_versions | join(', ') }}
   ansible.builtin.command: "php{{ item }} -n -r 'echo PHP_EXTENSION_DIR;'"
@@ -30,15 +41,17 @@
   changed_when: false
 
 - block:
-    - name: hp_uploadprogress_guard-{{ item.item }}.so -> {{ item.stdout }}/hp_uploadprogress_guard.so
+    - name: hp_uploadprogress_guard-{{ item.item }}{{ php_uploadprogress_guard_arch_suffix }}.so -> {{ item.stdout }}/hp_uploadprogress_guard.so
       ansible.builtin.copy:
-        src: "uploadprogress-guard/hp_uploadprogress_guard-{{ item.item }}.so"
+        src: "uploadprogress-guard/hp_uploadprogress_guard-{{ item.item }}{{ php_uploadprogress_guard_arch_suffix }}.so"
         dest: "{{ item.stdout }}/hp_uploadprogress_guard.so"
         mode: '0644'
       loop: "{{ php_uploadprogress_guard_extension_dirs.results }}"
       loop_control:
         label: "{{ item.item }}"
-      notify: restart php-fpm uploadprogress guard versions
+      notify:
+        - restart php-fpm uploadprogress guard versions
+        - restart apache2 mod_php uploadprogress guard
 
     - name: hp_uploadprogress_guard.ini -> /etc/php/{{ item }}/mods-available/hp_uploadprogress_guard.ini
       ansible.builtin.template:
@@ -46,14 +59,18 @@
         dest: "/etc/php/{{ item }}/mods-available/hp_uploadprogress_guard.ini"
         mode: '0644'
       loop: "{{ php_uploadprogress_guard_versions }}"
-      notify: restart php-fpm uploadprogress guard versions
+      notify:
+        - restart php-fpm uploadprogress guard versions
+        - restart apache2 mod_php uploadprogress guard
 
     - name: phpenmod hp_uploadprogress_guard -> all SAPIs of {{ php_uploadprogress_guard_versions | join(', ') }}
       ansible.builtin.command: "phpenmod -v {{ item }} -s ALL hp_uploadprogress_guard"
       args:
         creates: "/etc/php/{{ item }}/fpm/conf.d/20-hp_uploadprogress_guard.ini"
       loop: "{{ php_uploadprogress_guard_versions }}"
-      notify: restart php-fpm uploadprogress guard versions
+      notify:
+        - restart php-fpm uploadprogress guard versions
+        - restart apache2 mod_php uploadprogress guard
 
   when: php_uploadprogress_guard_enabled | bool
 
@@ -63,7 +80,9 @@
       args:
         removes: "/etc/php/{{ item }}/fpm/conf.d/20-hp_uploadprogress_guard.ini"
       loop: "{{ php_uploadprogress_guard_versions }}"
-      notify: restart php-fpm uploadprogress guard versions
+      notify:
+        - restart php-fpm uploadprogress guard versions
+        - restart apache2 mod_php uploadprogress guard
 
     - name: Remove hp_uploadprogress_guard.ini -> /etc/php/{{ item }}/mods-available/hp_uploadprogress_guard.ini
       ansible.builtin.file:
