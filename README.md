@@ -387,7 +387,7 @@ and add an ini with `extension=hp_uploadprogress_guard.so` to the scan dir of ev
 V=8.3
 install -m 0644 dist/hp_uploadprogress_guard-$V.so "$(php$V -n -r 'echo PHP_EXTENSION_DIR;')/hp_uploadprogress_guard.so"
 install -m 0644 ansible/mods-available-hp_uploadprogress_guard.ini /etc/php/$V/mods-available/hp_uploadprogress_guard.ini
-phpenmod -v $V -s ALL hp_uploadprogress_guard
+phpenmod -v $V -s ALL hp_uploadprogress_guard      # the ini is just "; priority=20" + "extension=hp_uploadprogress_guard.so" plus commented defaults
 systemctl restart php$V-fpm        # and apache2 if you run mod_php
 ```
 
